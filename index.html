@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Backup Reserve Manager</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js"></script>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="auth-overlay" id="authOverlay">
+        <div class="auth-container">
+            <div class="auth-icon"><i class="fas fa-lock"></i></div>
+            <h2>Access</h2>
+            <p class="auth-subtitle">Enter code</p>
+            <div class="auth-input-group">
+                <input type="password" id="authInput" class="auth-input" placeholder="••••" maxlength="4" autocomplete="off">
+                <button id="authSubmitBtn" class="auth-btn"><i class="fas fa-arrow-right"></i></button>
+            </div>
+            <div class="auth-error" id="authError"></div>
+        </div>
+    </div>
+
+    <div class="app-container" id="app" style="display:none;">
+        <div class="drop-overlay" id="dropOverlay">
+            <i class="fas fa-cloud-upload-alt"></i>
+            <h2>Drop your JSON file</h2>
+            <p>Database will be loaded automatically</p>
+        </div>
+
+        <header class="header">
+            <div class="header-top">
+                <h1><i class="fas fa-layer-group"></i>Backup Reserve Manager</h1>
+                <div class="header-actions">
+                    <span class="drop-hint"><i class="fas fa-cloud-upload-alt"></i> Drag &amp; drop .json</span>
+                    <button class="btn btn-primary" id="exportBtn"><i class="fas fa-download"></i> Export</button>
+                    <button class="btn btn-secondary" id="importBtn"><i class="fas fa-upload"></i> Import</button>
+                    <span class="sync-status" id="syncStatus"><i class="fas fa-circle"></i> Offline</span>
+                    <input type="file" id="fileInput" class="hidden" accept=".json">
+                </div>
+            </div>
+        </header>
+
+        <div class="toolbar">
+            <div class="toolbar-actions">
+                <button class="btn btn-add" id="addBtn"><i class="fas fa-plus-circle"></i> Add Reserve</button>
+                <button class="btn btn-upi" id="upiBtn"><i class="fas fa-qrcode"></i> Generate UPI QR</button>
+                <button class="btn btn-actions" id="actionsBtn" style="position:relative;">
+                    <i class="fas fa-tasks"></i> Actions Needed
+                    <span class="badge-actions" id="actionsBadge" style="position:absolute;top:-5px;right:-5px;background:#dc3545;color:white;border-radius:50%;padding:2px 6px;font-size:0.6rem;font-weight:700;display:none;border:2px solid white;">0</span>
+                </button>
+            </div>
+            <div class="search-container">
+                <i class="fas fa-search"></i>
+                <input type="text" id="searchInput" placeholder="Search backup items..." class="search-input">
+            </div>
+            <div class="stats">
+                <span><i class="fas fa-layer-group"></i> Items: <strong id="itemCount">0</strong></span>
+                <span><i class="fas fa-circle" style="color:#0066a0;"></i> Online: ₹<span id="totalOnline">0</span></span>
+                <span><i class="fas fa-circle" style="color:#2a7a4b;"></i> Cash: ₹<span id="totalCash">0</span></span>
+                <span><i class="fas fa-coins"></i> Total: ₹<span id="totalReserves">0</span></span>
+            </div>
+        </div>
+
+        <div class="table-wrapper" id="tableWrapper">
+            <table>
+                <thead>
+                    <tr><th>#</th><th>Backup Item</th><th>Online (₹)</th><th>Cash (₹)</th><th>Required (₹)</th><th>Covered %</th><th>Description</th></tr>
+                </thead>
+                <tbody id="tableBody"></tbody>
+            </table>
+        </div>
+
+        <footer class="footer">
+            <span><i class="fas fa-edit"></i> Click item name → full details</span>
+            <span><i class="fas fa-cloud-upload-alt"></i> Auto-syncs to cloud</span>
+            <span><i class="fas fa-lock"></i> Data is securely stored in Google's infrastructure.</span>
+        </footer>
+    </div>
+
+    <div class="modal-overlay" id="actionsOverlay">
+        <div class="modal modal-actions">
+            <div class="modal-header">
+                <h2><i class="fas fa-tasks"></i> Actions Needed</h2>
+                <button class="modal-close" id="actionsCloseBtn">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="actions-scroll-container"><div id="actionsList"></div></div>
+                <div class="add-action-area">
+                    <input type="text" id="newActionInput" placeholder="Add new action...">
+                    <button class="btn btn-success" id="addActionBtn"><i class="fas fa-plus"></i> Add</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal-overlay" id="cardOverlay">
+        <div class="modal modal-card">
+            <div class="modal-header">
+                <div><h2 id="cardTitle">Reserve Item</h2><span class="badge" id="cardCategory">Category</span></div>
+                <button class="modal-close" id="cardCloseBtn">&times;</button>
+            </div>
+            <div class="modal-body" id="cardBody"></div>
+            <div class="modal-actions">
+                <button class="btn btn-edit" id="cardEditBtn"><i class="fas fa-pen"></i> Edit</button>
+                <button class="btn btn-delete" id="cardDeleteBtn"><i class="fas fa-trash-alt"></i> Delete</button>
+                <button class="btn btn-secondary" id="cardCloseActionBtn">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal-overlay" id="upiOverlay">
+        <div class="modal modal-upi">
+            <div class="modal-header">
+                <h2><i class="fas fa-qrcode"></i> UPI Payment</h2>
+                <button class="modal-close" id="upiCloseBtn">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="upi-selector">
+                    <select id="upiSelector"><option value="">-- Select UPI ID --</option></select>
+                    <button class="btn btn-secondary" id="refreshUpiBtn"><i class="fas fa-sync"></i></button>
+                </div>
+                <div class="upi-manager">
+                    <input type="text" id="newUpiInput" placeholder="Enter new UPI ID" value="8449234615@kotakbank">
+                    <button class="btn btn-success" id="addUpiBtn"><i class="fas fa-plus"></i> Add</button>
+                    <button class="btn btn-danger" id="removeUpiBtn"><i class="fas fa-trash"></i></button>
+                </div>
+                <div class="upi-list" id="savedUpiList"></div>
+                <div class="upi-amount">
+                    <label for="upiAmountInput">Amount (₹):</label>
+                    <input type="number" id="upiAmountInput" placeholder="Any amount" step="0.01" min="0">
+                    <span class="hint">Leave empty for user to enter</span>
+                </div>
+                <div class="qr-container"><div id="qrcode"></div></div>
+                <div class="upi-details">
+                    <div class="detail-row"><span>UPI ID</span><span id="upiIdDisplay">-</span></div>
+                    <div class="detail-row"><span>Amount</span><span id="upiAmountDisplay">User decides</span></div>
+                    <div class="detail-row"><span>Payee</span><span id="upiPayeeDisplay">Reserve Manager</span></div>
+                    <div class="detail-row"><span>Note</span><span id="upiNoteDisplay">Reserve contribution</span></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal-overlay" id="formOverlay">
+        <div class="modal modal-form">
+            <h2 id="formTitle"><i class="fas fa-piggy-bank"></i> Add Reserve</h2>
+            <form id="reserveForm">
+                <label>Backup Item *</label>
+                <input type="text" id="itemName" placeholder="e.g. Amazon Pay Later" required>
+                <label>Category</label>
+                <input type="text" id="categoryInput" placeholder="Type category name or select from suggestions">
+                <div class="form-row">
+                    <div><label>Online (₹)</label><input type="number" id="onlineAmount" value="0" step="1"></div>
+                    <div><label>Cash (₹)</label><input type="number" id="cashAmount" value="0" step="1"></div>
+                </div>
+                <div class="form-row">
+                    <div><label>Required (₹)</label><input type="number" id="requiredAmount" value="0" step="1"></div>
+                    <div><label>Covered %</label><input type="text" id="coveredDisplay" readonly></div>
+                </div>
+                <label>Description</label>
+                <textarea id="descText" placeholder="Optional description"></textarea>
+                <div class="modal-actions">
+                    <button type="button" class="btn btn-secondary" id="formCloseBtn">Cancel</button>
+                    <button type="submit" class="btn btn-primary"><i class="fas fa-check"></i> Save</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <div class="toast" id="toast"></div>
+    <script src="script.js"></script>
+</body>
+</html>
