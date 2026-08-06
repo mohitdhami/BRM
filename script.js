@@ -5,6 +5,7 @@
  * 
  * This file contains all the application logic including:
  * - Firebase initialization and Google Sign-In
+ * - Per-user data isolation (each user has their own data)
  * - CRUD operations for reserve items
  * - Cloud synchronization with Firestore
  * - UPI QR code generation
@@ -91,7 +92,14 @@ const state = {
     user: null,
 
     /** Current search term for filtering reserves */
-    searchTerm: ''
+    searchTerm: '',
+
+    /** The document path for the current user's data */
+    getUserDocPath: function() {
+        if (!this.user) return null;
+        // Use the user's UID to create a unique document path
+        return `users/${this.user.uid}/data/main`;
+    }
 };
 
 // ============================================================
@@ -113,6 +121,7 @@ const dom = {
     authOverlay: $('authOverlay'),
     authError: $('authError'),
     googleSignInBtn: $('googleSignInBtn'),
+    userEmailDisplay: $('userEmailDisplay'),
 
     // Main app container
     app: $('app'),
@@ -856,11 +865,25 @@ function importData(file) {
 }
 
 // ============================================================
-// CLOUD SYNCHRONIZATION
+// CLOUD SYNCHRONIZATION - PER USER DATA
 // ============================================================
 
 /**
- * Trigger a sync with the Firestore server
+ * Get the Firestore document reference for the current user's data
+ * Each user gets their own document path: users/{uid}/data/main
+ * @returns {firebase.firestore.DocumentReference|null}
+ */
+function getUserDocRef() {
+    if (!auth?.currentUser) {
+        console.log('⏳ No user signed in');
+        return null;
+    }
+    // Use sub-collection per user for better security and isolation
+    return db.collection('users').doc(auth.currentUser.uid).collection('data').doc('main');
+}
+
+/**
+ * Trigger a sync with the Firestore server for the current user
  * Pushes local data and checks for server updates
  */
 async function triggerSync() {
@@ -882,7 +905,11 @@ async function triggerSync() {
     setSyncStatus('syncing', 'Syncing...');
 
     try {
-        const docRef = db.collection('reserves').doc('main');
+        const docRef = getUserDocRef();
+        if (!docRef) {
+            state.isSyncing = false;
+            return;
+        }
 
         // Check for server updates
         const snap = await docRef.get({ source: 'server' });
@@ -922,7 +949,9 @@ async function triggerSync() {
         await docRef.set({
             reserves: allData,
             updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
-            lastSync: new Date().toISOString()
+            lastSync: new Date().toISOString(),
+            userId: auth.currentUser.uid,
+            userEmail: auth.currentUser.email
         });
 
         state.serverTimestamp = new Date().toISOString();
@@ -938,7 +967,7 @@ async function triggerSync() {
 }
 
 /**
- * Load data from the Firestore server
+ * Load data from the Firestore server for the current user
  * @param {boolean} silent - Whether to suppress user-facing notifications
  */
 async function loadFromServer(silent = false) {
@@ -950,11 +979,24 @@ async function loadFromServer(silent = false) {
         return;
     }
 
+    if (!auth?.currentUser) {
+        setSyncStatus('error', 'Not signed in');
+        showToast('❌ Please sign in to load data', true);
+        state.isLoaded = false;
+        renderTable();
+        return;
+    }
+
     try {
-        if (!silent) showToast('🔄 Loading data from server...');
+        if (!silent) showToast('🔄 Loading your data from server...');
         setSyncStatus('syncing', 'Loading...');
 
-        const docRef = db.collection('reserves').doc('main');
+        const docRef = getUserDocRef();
+        if (!docRef) {
+            state.isLoaded = false;
+            return;
+        }
+
         const snap = await docRef.get({ source: 'server' });
 
         if (snap.exists) {
@@ -992,18 +1034,18 @@ async function loadFromServer(silent = false) {
             state.isLoaded = true;
 
             renderTable();
-            setSyncStatus('synced', `${state.reserves.length} items loaded`);
-            if (!silent) showToast(`✅ Loaded ${state.reserves.length} items from server`);
+            setSyncStatus('synced', `${state.reserves.length} items loaded (${auth.currentUser.email})`);
+            if (!silent) showToast(`✅ Loaded ${state.reserves.length} items from your account`);
 
         } else {
-            // No data on server - start fresh
+            // No data on server - start fresh for this user
             state.reserves = [];
             state.nextId = 1;
             state.isLoaded = true;
 
             renderTable();
             setSyncStatus('synced', 'Ready (empty)');
-            if (!silent) showToast('📭 No data found on server');
+            if (!silent) showToast('📭 No data found for your account');
         }
 
     } catch (error) {
@@ -1038,13 +1080,19 @@ async function signInWithGoogle() {
         dom.authOverlay.classList.add('hidden');
         dom.app.style.display = 'flex';
 
+        // Update user display
+        const userDisplay = document.getElementById('userDisplay');
+        if (userDisplay) {
+            userDisplay.textContent = `👤 ${result.user.displayName || result.user.email}`;
+        }
+
         // Load data after sign-in
         await loadFromServer(false);
 
         // Set up periodic sync
         setupAutoSync();
 
-        showToast('✅ Signed in as ' + result.user.displayName);
+        showToast('✅ Signed in as ' + (result.user.displayName || result.user.email));
 
     } catch (error) {
         dom.authError.textContent = 'Sign-in failed: ' + error.message;
@@ -1062,9 +1110,13 @@ function signOut() {
         .then(() => {
             state.user = null;
             state.isLoaded = false;
+            state.reserves = [];
+            state.upiIds = [];
+            state.actions = [];
             dom.app.style.display = 'none';
             dom.authOverlay.classList.remove('hidden');
             showToast('Signed out');
+            renderTable();
         })
         .catch(error => {
             showToast('Sign out error', true);
@@ -1099,6 +1151,23 @@ function setupAutoSync() {
         }
     });
 }
+
+// ============================================================
+// FIREBASE SECURITY RULES (IMPORTANT!)
+// ============================================================
+/**
+ * You MUST set up Firestore Security Rules to ensure data isolation:
+ * 
+ * rules_version = '2';
+ * service cloud.firestore {
+ *   match /databases/{database}/documents {
+ *     // Users can only access their own data
+ *     match /users/{userId}/data/{docId} {
+ *       allow read, write: if request.auth != null && request.auth.uid == userId;
+ *     }
+ *   }
+ * }
+ */
 
 // ============================================================
 // INITIALIZATION
