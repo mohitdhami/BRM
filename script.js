@@ -15,6 +15,11 @@
  * 
  * Each user gets their own sub-collection under their UID.
  * This ensures complete data isolation between users.
+ * 
+ * SESSION PERSISTENCE:
+ * Firebase Auth automatically persists the user session.
+ * The app uses onAuthStateChanged to detect sign-in state
+ * and restore the session on page reload.
  * ================================================================
  */
 
@@ -43,11 +48,23 @@ let firebaseApp = null;
 let db = null;
 /** Firebase authentication instance */
 let auth = null;
+/** Flag to track if auth state is ready */
+let authReady = false;
 
 try {
     firebaseApp = firebase.initializeApp(firebaseConfig);
     db = firebase.firestore(firebaseApp);
     auth = firebase.auth(firebaseApp);
+    
+    // Enable persistence for auth state
+    auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL)
+        .then(() => {
+            console.log('✅ Auth persistence set to LOCAL');
+        })
+        .catch((error) => {
+            console.warn('⚠️ Auth persistence error:', error);
+        });
+    
     console.log('✅ Firebase initialized successfully');
 } catch (error) {
     console.warn('⚠️ Firebase initialization failed:', error);
@@ -97,15 +114,8 @@ const state = {
     /** Current search term for filtering reserves */
     searchTerm: '',
 
-    /**
-     * Get the Firestore document path for the current user's data
-     * Structure: users/{userUID}/data/main
-     * This ensures each user has their own isolated data collection
-     */
-    getUserDocPath: function() {
-        if (!this.user) return null;
-        return `users/${this.user.uid}/data/main`;
-    }
+    /** Flag to track if the app is initialized */
+    initialized: false
 };
 
 // ============================================================
@@ -1181,6 +1191,64 @@ function setupAutoSync() {
 }
 
 // ============================================================
+// AUTH STATE CHANGE HANDLER (Session Persistence)
+// ============================================================
+
+/**
+ * Handle Firebase Auth state changes
+ * This ensures the user stays logged in across page reloads
+ * and properly restores the session
+ */
+function handleAuthStateChange(user) {
+    if (user) {
+        // User is signed in - restore session
+        console.log('✅ User authenticated:', user.email);
+        state.user = user;
+        authReady = true;
+        
+        // Show app, hide auth overlay
+        dom.authOverlay.classList.add('hidden');
+        dom.app.style.display = 'flex';
+        
+        // Update user display
+        if (dom.userDisplay) {
+            dom.userDisplay.textContent = `👤 ${user.displayName || user.email}`;
+        }
+        
+        // Load data if not already loaded
+        if (!state.isLoaded) {
+            loadFromServer(false).then(() => {
+                setupAutoSync();
+            });
+        }
+    } else {
+        // User is signed out
+        console.log('🔒 User signed out');
+        authReady = true;
+        
+        // Only reset if we're not in the middle of a sign-in
+        if (!dom.authOverlay.classList.contains('hidden')) {
+            return;
+        }
+        
+        // Reset state
+        state.user = null;
+        state.isLoaded = false;
+        state.reserves = [];
+        state.upiIds = [];
+        state.actions = [];
+        
+        // Show auth overlay, hide app
+        dom.app.style.display = 'none';
+        dom.authOverlay.classList.remove('hidden');
+        if (dom.userDisplay) {
+            dom.userDisplay.textContent = '';
+        }
+        renderTable();
+    }
+}
+
+// ============================================================
 // FIREBASE SECURITY RULES (MUST BE SET UP IN FIREBASE CONSOLE)
 // ============================================================
 /**
@@ -1218,7 +1286,18 @@ function setupAutoSync() {
  * Initialize the application - set up all event listeners and UI
  */
 function initApp() {
-    // ---------- AUTH ----------
+    // ---------- SETUP AUTH STATE LISTENER (Session Persistence) ----------
+    if (auth) {
+        // Listen for auth state changes - this handles session restoration
+        auth.onAuthStateChanged(handleAuthStateChange);
+    } else {
+        console.warn('⚠️ Auth not available, session persistence disabled');
+        // Fallback: show auth overlay
+        dom.authOverlay.classList.remove('hidden');
+        dom.app.style.display = 'none';
+    }
+
+    // ---------- AUTH BUTTONS ----------
     dom.googleSignInBtn.addEventListener('click', signInWithGoogle);
     dom.signOutBtn.addEventListener('click', signOut);
 
@@ -1384,19 +1463,6 @@ function initApp() {
         }
     });
 
-    // ---------- AUTO-LOAD IF ALREADY SIGNED IN ----------
-    if (auth?.currentUser) {
-        state.user = auth.currentUser;
-        dom.authOverlay.classList.add('hidden');
-        dom.app.style.display = 'flex';
-        if (dom.userDisplay) {
-            dom.userDisplay.textContent = `👤 ${auth.currentUser.displayName || auth.currentUser.email}`;
-        }
-        loadFromServer(false).then(() => {
-            setupAutoSync();
-        });
-    }
-
     console.log('✅ App initialized successfully');
 }
 
@@ -1408,6 +1474,10 @@ function initApp() {
  * Start the application when DOM is ready
  */
 document.addEventListener('DOMContentLoaded', () => {
+    // Initially show auth overlay, hide app
     dom.app.style.display = 'none';
+    dom.authOverlay.classList.remove('hidden');
+    
+    // Initialize the app
     initApp();
 });
