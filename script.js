@@ -3,15 +3,18 @@
  * script.js - Backup Reserve Manager Application Logic
  * ================================================================
  * 
- * This file contains all the application logic including:
- * - Firebase initialization and Google Sign-In
- * - Per-user data isolation (each user has their own data)
- * - CRUD operations for reserve items
- * - Cloud synchronization with Firestore
- * - UPI QR code generation
- * - Action/task management
- * - Export/Import functionality
- * - UI rendering and event handling
+ * MULTI-USER DATA STRUCTURE:
+ * 
+ * Firestore Collection Structure:
+ * /users/{userId}/data/main
+ *   - reserves: Array of reserve items
+ *   - updatedAt: Timestamp
+ *   - lastSync: ISO string
+ *   - userId: string
+ *   - userEmail: string
+ * 
+ * Each user gets their own sub-collection under their UID.
+ * This ensures complete data isolation between users.
  * ================================================================
  */
 
@@ -94,10 +97,13 @@ const state = {
     /** Current search term for filtering reserves */
     searchTerm: '',
 
-    /** The document path for the current user's data */
+    /**
+     * Get the Firestore document path for the current user's data
+     * Structure: users/{userUID}/data/main
+     * This ensures each user has their own isolated data collection
+     */
     getUserDocPath: function() {
         if (!this.user) return null;
-        // Use the user's UID to create a unique document path
         return `users/${this.user.uid}/data/main`;
     }
 };
@@ -121,7 +127,7 @@ const dom = {
     authOverlay: $('authOverlay'),
     authError: $('authError'),
     googleSignInBtn: $('googleSignInBtn'),
-    userEmailDisplay: $('userEmailDisplay'),
+    userDisplay: $('userDisplay'),
 
     // Main app container
     app: $('app'),
@@ -870,7 +876,16 @@ function importData(file) {
 
 /**
  * Get the Firestore document reference for the current user's data
- * Each user gets their own document path: users/{uid}/data/main
+ * Each user gets their own sub-collection under users/{uid}/data/main
+ * 
+ * DATA STRUCTURE:
+ * users/{userId}/data/main
+ *   - reserves: Array of reserve items
+ *   - updatedAt: Server timestamp
+ *   - lastSync: ISO string
+ *   - userId: string
+ *   - userEmail: string
+ * 
  * @returns {firebase.firestore.DocumentReference|null}
  */
 function getUserDocRef() {
@@ -951,7 +966,8 @@ async function triggerSync() {
             updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
             lastSync: new Date().toISOString(),
             userId: auth.currentUser.uid,
-            userEmail: auth.currentUser.email
+            userEmail: auth.currentUser.email,
+            userName: auth.currentUser.displayName || auth.currentUser.email
         });
 
         state.serverTimestamp = new Date().toISOString();
@@ -1043,6 +1059,16 @@ async function loadFromServer(silent = false) {
             state.nextId = 1;
             state.isLoaded = true;
 
+            // Initialize empty document for this user
+            await docRef.set({
+                reserves: [],
+                updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+                lastSync: new Date().toISOString(),
+                userId: auth.currentUser.uid,
+                userEmail: auth.currentUser.email,
+                userName: auth.currentUser.displayName || auth.currentUser.email
+            });
+
             renderTable();
             setSyncStatus('synced', 'Ready (empty)');
             if (!silent) showToast('📭 No data found for your account');
@@ -1081,9 +1107,8 @@ async function signInWithGoogle() {
         dom.app.style.display = 'flex';
 
         // Update user display
-        const userDisplay = document.getElementById('userDisplay');
-        if (userDisplay) {
-            userDisplay.textContent = `👤 ${result.user.displayName || result.user.email}`;
+        if (dom.userDisplay) {
+            dom.userDisplay.textContent = `👤 ${result.user.displayName || result.user.email}`;
         }
 
         // Load data after sign-in
@@ -1115,6 +1140,9 @@ function signOut() {
             state.actions = [];
             dom.app.style.display = 'none';
             dom.authOverlay.classList.remove('hidden');
+            if (dom.userDisplay) {
+                dom.userDisplay.textContent = '';
+            }
             showToast('Signed out');
             renderTable();
         })
@@ -1153,20 +1181,33 @@ function setupAutoSync() {
 }
 
 // ============================================================
-// FIREBASE SECURITY RULES (IMPORTANT!)
+// FIREBASE SECURITY RULES (MUST BE SET UP IN FIREBASE CONSOLE)
 // ============================================================
 /**
- * You MUST set up Firestore Security Rules to ensure data isolation:
+ * ================================================================
+ * FIREBASE SECURITY RULES - Copy this to Firebase Console
+ * ================================================================
  * 
  * rules_version = '2';
  * service cloud.firestore {
  *   match /databases/{database}/documents {
  *     // Users can only access their own data
- *     match /users/{userId}/data/{docId} {
+ *     match /users/{userId}/{document=**} {
  *       allow read, write: if request.auth != null && request.auth.uid == userId;
+ *     }
+ *     
+ *     // Deny access to the root users collection
+ *     match /users/{userId} {
+ *       allow read, write: if false;
+ *     }
+ *     
+ *     // Deny access to any other collections
+ *     match /{document=**} {
+ *       allow read, write: if false;
  *     }
  *   }
  * }
+ * ================================================================
  */
 
 // ============================================================
@@ -1348,6 +1389,9 @@ function initApp() {
         state.user = auth.currentUser;
         dom.authOverlay.classList.add('hidden');
         dom.app.style.display = 'flex';
+        if (dom.userDisplay) {
+            dom.userDisplay.textContent = `👤 ${auth.currentUser.displayName || auth.currentUser.email}`;
+        }
         loadFromServer(false).then(() => {
             setupAutoSync();
         });
