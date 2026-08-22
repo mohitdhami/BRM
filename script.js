@@ -224,7 +224,7 @@ function setSyncStatus(icon, label) {
 }
 
 // ============================================================
-// CALCULATOR INPUT HANDLER
+// CALCULATOR INPUT HANDLER - FIXED VERSION
 // ============================================================
 
 /**
@@ -257,62 +257,12 @@ function safeEvaluate(expr) {
 }
 
 /**
- * Add calculator-like behavior to number input fields
- * - Allows entering expressions like "100+50-25"
- * - Evaluates on blur or Enter key
- * - Shows the result in the field
- */
-function setupCalculatorInputs() {
-    const numberInputs = document.querySelectorAll('#onlineAmount, #cashAmount, #requiredAmount');
-    
-    numberInputs.forEach(input => {
-        // Store original value for comparison
-        let previousValue = input.value;
-        
-        // Handle Enter key - evaluate expression
-        input.addEventListener('keydown', function(e) {
-            if (e.key === 'Enter') {
-                e.preventDefault();
-                evaluateCalculatorInput(this);
-                // Move to next field if tab-like behavior
-                const inputs = Array.from(numberInputs);
-                const currentIndex = inputs.indexOf(this);
-                if (currentIndex < inputs.length - 1) {
-                    inputs[currentIndex + 1].focus();
-                }
-            }
-        });
-        
-        // Handle blur - evaluate expression
-        input.addEventListener('blur', function() {
-            evaluateCalculatorInput(this);
-        });
-        
-        // Handle focus - select all text for easy editing
-        input.addEventListener('focus', function() {
-            this.select();
-        });
-        
-        // Handle input - track if user is typing an expression
-        input.addEventListener('input', function() {
-            const val = this.value.trim();
-            // If the value contains operators, show it as-is
-            if (/[+\-*/]/.test(val)) {
-                this.dataset.isExpression = 'true';
-            } else {
-                this.dataset.isExpression = 'false';
-            }
-            // Trigger covered % update
-            updateCoveredDisplay();
-        });
-    });
-}
-
-/**
  * Evaluate and update a calculator input field
  * @param {HTMLInputElement} input - The input element to evaluate
  */
 function evaluateCalculatorInput(input) {
+    if (!input) return;
+    
     const val = input.value.trim();
     if (!val) {
         input.value = '0';
@@ -320,13 +270,14 @@ function evaluateCalculatorInput(input) {
         return;
     }
     
-    // Check if it's an expression
+    // Check if it's an expression (contains operators)
     if (/[+\-*/]/.test(val)) {
         const result = safeEvaluate(val);
         if (result !== null) {
             input.value = result;
             input.dataset.isExpression = 'false';
-            showToast(`✅ Calculated: ${result}`, false);
+            // Show toast with calculation result
+            showToast(`🧮 ${val} = ${result}`, false);
             updateCoveredDisplay();
         } else {
             // If invalid expression, try to parse as number
@@ -335,8 +286,7 @@ function evaluateCalculatorInput(input) {
                 input.value = num;
                 updateCoveredDisplay();
             } else {
-                showToast('⚠️ Invalid expression', true);
-                // Keep the original value
+                showToast('⚠️ Invalid expression: ' + val, true);
             }
         }
     } else {
@@ -349,6 +299,66 @@ function evaluateCalculatorInput(input) {
         }
         updateCoveredDisplay();
     }
+}
+
+/**
+ * Setup calculator functionality on a single input element
+ * @param {HTMLInputElement} input - The input element to enhance
+ */
+function setupCalculatorOnInput(input) {
+    if (!input || input.dataset.calculatorEnabled === 'true') return;
+    
+    input.dataset.calculatorEnabled = 'true';
+    
+    // Handle Enter key - evaluate expression
+    input.addEventListener('keydown', function(e) {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            evaluateCalculatorInput(this);
+            // Move to next field
+            const inputs = document.querySelectorAll('#onlineAmount, #cashAmount, #requiredAmount');
+            const currentIndex = Array.from(inputs).indexOf(this);
+            if (currentIndex < inputs.length - 1) {
+                inputs[currentIndex + 1].focus();
+            }
+        }
+    });
+    
+    // Handle blur - evaluate expression
+    input.addEventListener('blur', function() {
+        evaluateCalculatorInput(this);
+    });
+    
+    // Handle focus - select all text for easy editing
+    input.addEventListener('focus', function() {
+        this.select();
+    });
+    
+    // Handle input - update covered % display
+    input.addEventListener('input', function() {
+        // If the value contains operators, show a hint
+        if (/[+\-*/]/.test(this.value)) {
+            this.style.borderColor = '#ffc107';
+            this.style.background = 'rgba(255, 193, 7, 0.05)';
+        } else {
+            this.style.borderColor = '';
+            this.style.background = '';
+        }
+        updateCoveredDisplay();
+    });
+}
+
+/**
+ * Setup calculator functionality on all number input fields
+ * This should be called whenever the form is opened
+ */
+function setupCalculatorInputs() {
+    // Get all number input fields in the form
+    const numberInputs = document.querySelectorAll('#onlineAmount, #cashAmount, #requiredAmount');
+    
+    numberInputs.forEach(input => {
+        setupCalculatorOnInput(input);
+    });
 }
 
 // ============================================================
@@ -712,6 +722,12 @@ function openForm(editItem = null) {
 
     updateCoveredDisplay();
     document.getElementById('formOverlay').classList.add('active');
+    
+    // IMPORTANT: Setup calculator inputs AFTER the form is opened
+    // Use a small delay to ensure DOM is fully rendered
+    setTimeout(() => {
+        setupCalculatorInputs();
+    }, 50);
 }
 
 /**
@@ -746,6 +762,12 @@ function updateCoveredDisplay() {
  */
 function saveReserve(e) {
     e.preventDefault();
+
+    // Evaluate any pending expressions before saving
+    const numberInputs = document.querySelectorAll('#onlineAmount, #cashAmount, #requiredAmount');
+    numberInputs.forEach(input => {
+        evaluateCalculatorInput(input);
+    });
 
     const name = document.getElementById('itemName').value.trim();
     if (!name) {
@@ -1499,9 +1521,6 @@ function initApp() {
     document.getElementById('onlineAmount').addEventListener('input', updateCoveredDisplay);
     document.getElementById('cashAmount').addEventListener('input', updateCoveredDisplay);
     document.getElementById('requiredAmount').addEventListener('input', updateCoveredDisplay);
-
-    // ---------- SETUP CALCULATOR INPUTS ----------
-    setupCalculatorInputs();
 
     // ---------- DETAIL CARD ----------
     document.getElementById('cardCloseBtn').addEventListener('click', closeDetail);
