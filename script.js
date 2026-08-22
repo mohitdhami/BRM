@@ -224,7 +224,7 @@ function setSyncStatus(icon, label) {
 }
 
 // ============================================================
-// CALCULATOR INPUT HANDLER - FIXED VERSION
+// CALCULATOR INPUT HANDLER - WITH REAL-TIME PREVIEW
 // ============================================================
 
 /**
@@ -257,15 +257,88 @@ function safeEvaluate(expr) {
 }
 
 /**
- * Evaluate and update a calculator input field
+ * Get or create preview element for a number input
+ * @param {HTMLInputElement} input - The input element
+ * @returns {HTMLElement} The preview element
+ */
+function getOrCreatePreview(input) {
+    let preview = input.parentElement.querySelector('.calc-preview');
+    if (!preview) {
+        preview = document.createElement('span');
+        preview.className = 'calc-preview';
+        preview.style.cssText = `
+            font-size: 0.7rem;
+            color: #28a745;
+            font-weight: 600;
+            margin-left: 6px;
+            opacity: 0;
+            transition: opacity 0.2s ease;
+            font-family: 'JetBrains Mono', monospace;
+            white-space: nowrap;
+        `;
+        input.parentElement.appendChild(preview);
+    }
+    return preview;
+}
+
+/**
+ * Update the real-time calculation preview
+ * @param {HTMLInputElement} input - The input element
+ */
+function updatePreview(input) {
+    if (!input) return;
+    
+    const val = input.value.trim();
+    const preview = getOrCreatePreview(input);
+    
+    // Check if it's an expression
+    if (/[+\-*/]/.test(val)) {
+        const result = safeEvaluate(val);
+        if (result !== null) {
+            preview.textContent = `= ${result}`;
+            preview.style.color = '#28a745';
+            preview.style.opacity = '1';
+            preview.style.borderColor = '#28a745';
+            input.style.borderColor = '#28a745';
+            input.style.background = 'rgba(40, 167, 69, 0.05)';
+        } else {
+            preview.textContent = '⚠️ invalid';
+            preview.style.color = '#dc3545';
+            preview.style.opacity = '1';
+            input.style.borderColor = '#dc3545';
+            input.style.background = 'rgba(220, 53, 69, 0.05)';
+        }
+    } else {
+        preview.style.opacity = '0';
+        input.style.borderColor = '';
+        input.style.background = '';
+        
+        // Also update if it's a valid number
+        const num = parseFloat(val);
+        if (!isNaN(num) && val !== '') {
+            preview.textContent = `= ${num}`;
+            preview.style.color = '#6c757d';
+            preview.style.opacity = '0.5';
+        }
+    }
+    
+    // Update covered percentage
+    updateCoveredDisplay();
+}
+
+/**
+ * Evaluate and finalize a calculator input field (on Enter or Blur)
  * @param {HTMLInputElement} input - The input element to evaluate
  */
 function evaluateCalculatorInput(input) {
     if (!input) return;
     
     const val = input.value.trim();
+    const preview = input.parentElement.querySelector('.calc-preview');
+    
     if (!val) {
         input.value = '0';
+        if (preview) preview.style.opacity = '0';
         updateCoveredDisplay();
         return;
     }
@@ -274,19 +347,29 @@ function evaluateCalculatorInput(input) {
     if (/[+\-*/]/.test(val)) {
         const result = safeEvaluate(val);
         if (result !== null) {
-            input.value = result;
-            input.dataset.isExpression = 'false';
-            // Show toast with calculation result
-            showToast(`🧮 ${val} = ${result}`, false);
+            const displayVal = Number.isInteger(result) ? result : result.toFixed(2);
+            input.value = displayVal;
+            if (preview) {
+                preview.textContent = `= ${displayVal}`;
+                preview.style.color = '#28a745';
+                preview.style.opacity = '0.7';
+            }
+            input.style.borderColor = '';
+            input.style.background = '';
+            showToast(`🧮 ${val} = ${displayVal}`, false);
             updateCoveredDisplay();
+            return;
         } else {
             // If invalid expression, try to parse as number
             const num = parseFloat(val);
             if (!isNaN(num)) {
                 input.value = num;
                 updateCoveredDisplay();
+                return;
             } else {
                 showToast('⚠️ Invalid expression: ' + val, true);
+                // Keep the original value so user can fix it
+                return;
             }
         }
     } else {
@@ -297,7 +380,9 @@ function evaluateCalculatorInput(input) {
         } else {
             input.value = '0';
         }
+        if (preview) preview.style.opacity = '0';
         updateCoveredDisplay();
+        return;
     }
 }
 
@@ -310,7 +395,73 @@ function setupCalculatorOnInput(input) {
     
     input.dataset.calculatorEnabled = 'true';
     
-    // Handle Enter key - evaluate expression
+    // Create wrapper for input + preview
+    const wrapper = document.createElement('div');
+    wrapper.style.cssText = `
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        position: relative;
+        width: 100%;
+    `;
+    
+    // Wrap the input
+    input.parentNode.insertBefore(wrapper, input);
+    wrapper.appendChild(input);
+    
+    // Create preview element
+    const preview = document.createElement('span');
+    preview.className = 'calc-preview';
+    preview.style.cssText = `
+        font-size: 0.7rem;
+        color: #28a745;
+        font-weight: 600;
+        margin-left: 4px;
+        opacity: 0;
+        transition: all 0.2s ease;
+        font-family: 'JetBrains Mono', monospace;
+        white-space: nowrap;
+        min-width: 40px;
+        flex-shrink: 0;
+    `;
+    wrapper.appendChild(preview);
+    
+    // Update input styles
+    input.style.flex = '1';
+    input.style.minWidth = '0';
+    
+    // Handle real-time input - update preview as user types
+    input.addEventListener('input', function() {
+        const val = this.value.trim();
+        const previewEl = this.parentElement.querySelector('.calc-preview');
+        
+        // Check if it's an expression
+        if (/[+\-*/]/.test(val)) {
+            const result = safeEvaluate(val);
+            if (result !== null) {
+                const displayVal = Number.isInteger(result) ? result : result.toFixed(2);
+                previewEl.textContent = `= ${displayVal}`;
+                previewEl.style.color = '#28a745';
+                previewEl.style.opacity = '1';
+                this.style.borderColor = '#28a745';
+                this.style.background = 'rgba(40, 167, 69, 0.05)';
+            } else {
+                previewEl.textContent = '⚠️';
+                previewEl.style.color = '#dc3545';
+                previewEl.style.opacity = '1';
+                this.style.borderColor = '#dc3545';
+                this.style.background = 'rgba(220, 53, 69, 0.05)';
+            }
+        } else {
+            previewEl.style.opacity = '0';
+            this.style.borderColor = '';
+            this.style.background = '';
+        }
+        
+        updateCoveredDisplay();
+    });
+    
+    // Handle Enter key - evaluate and finalize
     input.addEventListener('keydown', function(e) {
         if (e.key === 'Enter') {
             e.preventDefault();
@@ -324,7 +475,7 @@ function setupCalculatorOnInput(input) {
         }
     });
     
-    // Handle blur - evaluate expression
+    // Handle blur - evaluate and finalize
     input.addEventListener('blur', function() {
         evaluateCalculatorInput(this);
     });
@@ -332,19 +483,6 @@ function setupCalculatorOnInput(input) {
     // Handle focus - select all text for easy editing
     input.addEventListener('focus', function() {
         this.select();
-    });
-    
-    // Handle input - update covered % display
-    input.addEventListener('input', function() {
-        // If the value contains operators, show a hint
-        if (/[+\-*/]/.test(this.value)) {
-            this.style.borderColor = '#ffc107';
-            this.style.background = 'rgba(255, 193, 7, 0.05)';
-        } else {
-            this.style.borderColor = '';
-            this.style.background = '';
-        }
-        updateCoveredDisplay();
     });
 }
 
@@ -357,6 +495,10 @@ function setupCalculatorInputs() {
     const numberInputs = document.querySelectorAll('#onlineAmount, #cashAmount, #requiredAmount');
     
     numberInputs.forEach(input => {
+        // Check if already setup (by checking if parent is wrapper)
+        if (input.parentElement.classList?.contains('calc-wrapper')) {
+            return;
+        }
         setupCalculatorOnInput(input);
     });
 }
@@ -740,15 +882,45 @@ function closeForm() {
 
 /**
  * Update the covered percentage display based on form inputs
+ * This function now safely handles expressions by parsing the values
  */
 function updateCoveredDisplay() {
-    const online = parseFloat(document.getElementById('onlineAmount')?.value) || 0;
-    const cash = parseFloat(document.getElementById('cashAmount')?.value) || 0;
-    const req = parseFloat(document.getElementById('requiredAmount')?.value) || 0;
+    const onlineInput = document.getElementById('onlineAmount');
+    const cashInput = document.getElementById('cashAmount');
+    const requiredInput = document.getElementById('requiredAmount');
+    
+    // Get raw values - they might be expressions
+    const onlineRaw = onlineInput?.value || '0';
+    const cashRaw = cashInput?.value || '0';
+    const requiredRaw = requiredInput?.value || '0';
+    
+    // Try to evaluate the values if they are expressions
+    let online = parseFloat(onlineRaw);
+    let cash = parseFloat(cashRaw);
+    let required = parseFloat(requiredRaw);
+    
+    // If parsing failed and it contains operators, try to evaluate
+    if (isNaN(online) && /[+\-*/]/.test(onlineRaw)) {
+        const result = safeEvaluate(onlineRaw);
+        if (result !== null) online = result;
+    }
+    if (isNaN(cash) && /[+\-*/]/.test(cashRaw)) {
+        const result = safeEvaluate(cashRaw);
+        if (result !== null) cash = result;
+    }
+    if (isNaN(required) && /[+\-*/]/.test(requiredRaw)) {
+        const result = safeEvaluate(requiredRaw);
+        if (result !== null) required = result;
+    }
+    
+    // If still NaN, default to 0
+    if (isNaN(online)) online = 0;
+    if (isNaN(cash)) cash = 0;
+    if (isNaN(required)) required = 0;
+    
     const disp = document.getElementById('coveredDisplay');
-
     if (disp) {
-        disp.value = req ? ((online + cash) / req * 100).toFixed(4) + '%' : '0%';
+        disp.value = required > 0 ? ((online + cash) / required * 100).toFixed(4) + '%' : '0%';
     }
 }
 
@@ -1517,7 +1689,7 @@ function initApp() {
     });
     document.getElementById('reserveForm').addEventListener('submit', saveReserve);
 
-    // Covered % auto-update
+    // Covered % auto-update - use the enhanced version
     document.getElementById('onlineAmount').addEventListener('input', updateCoveredDisplay);
     document.getElementById('cashAmount').addEventListener('input', updateCoveredDisplay);
     document.getElementById('requiredAmount').addEventListener('input', updateCoveredDisplay);
