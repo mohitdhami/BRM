@@ -2,32 +2,12 @@
  * ================================================================
  * script.js - Backup Reserve Manager Application Logic
  * ================================================================
- * 
- * MULTI-USER DATA STRUCTURE:
- * 
- * Firestore Collection Structure:
- * /users/{userId}/data/main
- *   - reserves: Array of reserve items
- *   - updatedAt: Timestamp
- *   - lastSync: ISO string
- *   - userId: string
- *   - userEmail: string
- * 
- * Each user gets their own sub-collection under their UID.
- * This ensures complete data isolation between users.
- * 
- * SESSION PERSISTENCE:
- * Firebase Auth automatically persists the user session.
- * The app uses onAuthStateChanged to detect sign-in state
- * and restore the session on page reload.
- * ================================================================
  */
 
 // ============================================================
 // FIREBASE CONFIGURATION
 // ============================================================
 
-/** Firebase configuration object - public keys for client-side use */
 const firebaseConfig = {
     apiKey: "AIzaSyC-HgNBgtp6eF7WRUL-2s_8t4w1lRvn78M",
     authDomain: "reserve-manager-ea55b.firebaseapp.com",
@@ -42,28 +22,18 @@ const firebaseConfig = {
 // FIREBASE INITIALIZATION
 // ============================================================
 
-/** Firebase app instance */
 let firebaseApp = null;
-/** Firestore database instance */
 let db = null;
-/** Firebase authentication instance */
 let auth = null;
-/** Flag to track if auth state is ready */
-let authReady = false;
 
 try {
     firebaseApp = firebase.initializeApp(firebaseConfig);
     db = firebase.firestore(firebaseApp);
     auth = firebase.auth(firebaseApp);
     
-    // Enable persistence for auth state
     auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL)
-        .then(() => {
-            console.log('✅ Auth persistence set to LOCAL');
-        })
-        .catch((error) => {
-            console.warn('⚠️ Auth persistence error:', error);
-        });
+        .then(() => console.log('✅ Auth persistence set to LOCAL'))
+        .catch((error) => console.warn('⚠️ Auth persistence error:', error));
     
     console.log('✅ Firebase initialized successfully');
 } catch (error) {
@@ -74,143 +44,122 @@ try {
 // APPLICATION STATE
 // ============================================================
 
-/**
- * Application state object containing all runtime data
- */
 const state = {
-    /** Array of reserve items (excluding the system config item) */
     reserves: [],
-
-    /** Next available ID for new reserve items */
     nextId: 1,
-
-    /** List of saved UPI IDs for QR generation */
     upiIds: [],
-
-    /** Currently selected/default UPI ID */
     upiDefault: '',
-
-    /** List of action/task items with completion status */
     actions: [],
-
-    /** ID of the reserve item currently viewed in the detail modal */
     selectedId: null,
-
-    /** ID of the reserve item currently being edited (null for add mode) */
     editId: null,
-
-    /** Timestamp of the last successful server sync */
     serverTimestamp: null,
-
-    /** Flag indicating if a sync operation is in progress */
     isSyncing: false,
-
-    /** Flag indicating if data has been loaded from server */
     isLoaded: false,
-
-    /** Currently authenticated user object from Firebase */
     user: null,
-
-    /** Current search term for filtering reserves */
     searchTerm: '',
-
-    /** Flag to track if the app is initialized */
-    initialized: false
+    initialized: false,
+    theme: 'light' // 'light' or 'dark'
 };
 
 // ============================================================
-// DOM REFERENCE SHORTCUTS
+// DOM REFERENCES
 // ============================================================
 
-/**
- * Helper function to get DOM element by ID
- * @param {string} id - Element ID
- * @returns {HTMLElement|null} DOM element or null if not found
- */
 const $ = (id) => document.getElementById(id);
 
-/**
- * DOM element references for frequently accessed elements
- */
 const dom = {
-    // Auth overlay
     authOverlay: $('authOverlay'),
     authError: $('authError'),
     googleSignInBtn: $('googleSignInBtn'),
     userDisplay: $('userDisplay'),
-
-    // Main app container
     app: $('app'),
-
-    // Table and stats
     tableBody: $('tableBody'),
     itemCount: $('itemCount'),
     totalOnline: $('totalOnline'),
     totalCash: $('totalCash'),
     totalReserves: $('totalReserves'),
-
-    // Status and feedback
     syncStatus: $('syncStatus'),
     toast: $('toast'),
-
-    // Drop overlay
     dropOverlay: $('dropOverlay'),
-
-    // Actions
     actionsList: $('actionsList'),
     actionsBadge: $('actionsBadge'),
-
-    // Search and filters
     searchInput: $('searchInput'),
     categoryInput: $('categoryInput'),
-
-    // Buttons
     addBtn: $('addBtn'),
     exportBtn: $('exportBtn'),
     importBtn: $('importBtn'),
     upiBtn: $('upiBtn'),
     actionsBtn: $('actionsBtn'),
     signOutBtn: $('signOutBtn'),
-    fileInput: $('fileInput')
+    fileInput: $('fileInput'),
+    themeToggle: $('themeToggle')
 };
 
-/** Timer reference for toast auto-dismiss */
 let toastTimer = null;
 
 // ============================================================
-// TOAST NOTIFICATION SYSTEM
+// THEME MANAGEMENT
 // ============================================================
 
 /**
- * Display a toast notification
- * @param {string} message - Message to display
- * @param {boolean} isError - Whether this is an error message
+ * Apply theme to the entire app
  */
-function showToast(message, isError = false) {
-    if (!dom.toast) return;
+function applyTheme(theme) {
+    state.theme = theme;
+    document.documentElement.setAttribute('data-theme', theme);
+    localStorage.setItem('theme', theme);
+    
+    // Update toggle button icon
+    if (dom.themeToggle) {
+        dom.themeToggle.innerHTML = theme === 'dark' 
+            ? '<i class="fas fa-sun"></i>'
+            : '<i class="fas fa-moon"></i>';
+        dom.themeToggle.title = theme === 'dark' ? 'Switch to Light Mode' : 'Switch to Dark Mode';
+    }
+    
+    // Update body background
+    if (theme === 'dark') {
+        document.body.style.background = 'linear-gradient(145deg, #1a1a2e 0%, #16213e 100%)';
+    } else {
+        document.body.style.background = 'linear-gradient(145deg, #e8eef5 0%, #d5dfe9 100%)';
+    }
+}
 
-    dom.toast.textContent = message;
-    dom.toast.className = 'toast' + (isError ? ' error' : '');
-    dom.toast.classList.add('show');
+/**
+ * Toggle between light and dark themes
+ */
+function toggleTheme() {
+    const newTheme = state.theme === 'light' ? 'dark' : 'light';
+    applyTheme(newTheme);
+}
 
-    clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => {
-        dom.toast.classList.remove('show');
-    }, 3000);
+/**
+ * Load saved theme from localStorage
+ */
+function loadTheme() {
+    const savedTheme = localStorage.getItem('theme') || 'light';
+    applyTheme(savedTheme);
 }
 
 // ============================================================
-// SYNC STATUS INDICATOR
+// TOAST NOTIFICATION
 // ============================================================
 
-/**
- * Update the sync status indicator
- * @param {string} icon - FontAwesome icon name (without 'fa-' prefix)
- * @param {string} label - Status label text
- */
+function showToast(message, isError = false) {
+    if (!dom.toast) return;
+    dom.toast.textContent = message;
+    dom.toast.className = 'toast' + (isError ? ' error' : '');
+    dom.toast.classList.add('show');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => dom.toast.classList.remove('show'), 3000);
+}
+
+// ============================================================
+// SYNC STATUS
+// ============================================================
+
 function setSyncStatus(icon, label) {
     if (!dom.syncStatus) return;
-
     const icons = {
         synced: 'fa-check-circle',
         syncing: 'fa-spinner fa-spin',
@@ -218,37 +167,64 @@ function setSyncStatus(icon, label) {
         offline: 'fa-circle',
         warning: 'fa-exclamation-triangle'
     };
-
     dom.syncStatus.innerHTML = `<i class="fas ${icons[icon] || 'fa-circle'}"></i> ${label}`;
     dom.syncStatus.className = 'sync-status ' + (icon || 'offline');
 }
 
 // ============================================================
-// CALCULATOR INPUT HANDLER - WITH REAL-TIME PREVIEW
+// CALCULATOR - COMPLETELY REWRITTEN FOR RELIABILITY
+// ============================================================
+
+// ============================================================
+// CALCULATOR - WITH CLEAN RESET ON FORM CLOSE
 // ============================================================
 
 /**
- * Evaluate a mathematical expression safely
- * Supports +, -, *, / operations
- * @param {string} expr - Mathematical expression
- * @returns {number|null} Calculated result or null if invalid
+ * Safely evaluate a mathematical expression
+ * Supports +, -, *, / and parentheses
  */
 function safeEvaluate(expr) {
-    if (!expr || expr.trim() === '') return null;
+    if (!expr || typeof expr !== 'string' || expr.trim() === '') return null;
     
-    // Remove all spaces
     let sanitized = expr.replace(/\s/g, '');
-    
-    // Only allow numbers, operators, and parentheses
+    if (!sanitized) return null;
+
+    if (/\/\s*0(?!\.)/.test(sanitized)) {
+        return null;
+    }
+
     if (!/^[0-9+\-*/().]+$/.test(sanitized)) {
         return null;
     }
-    
+
+    if (/[+\-*/]{2,}/.test(sanitized.replace(/^\-/, ''))) {
+        return null;
+    }
+
+    if (/\d+\.\d+\./.test(sanitized)) {
+        return null;
+    }
+
+    let parenCount = 0;
+    for (const char of sanitized) {
+        if (char === '(') parenCount++;
+        if (char === ')') parenCount--;
+        if (parenCount < 0) return null;
+    }
+    if (parenCount !== 0) return null;
+
+    if (/[+\-*/]$/.test(sanitized)) {
+        return null;
+    }
+
+    if (/\(\)/.test(sanitized)) {
+        return null;
+    }
+
     try {
-        // Use Function constructor for safe evaluation
         const result = new Function(`return (${sanitized})`)();
         if (typeof result === 'number' && !isNaN(result) && isFinite(result)) {
-            return Math.round(result * 100) / 100; // Round to 2 decimal places
+            return Math.round(result * 1000000) / 1000000;
         }
         return null;
     } catch (e) {
@@ -257,249 +233,260 @@ function safeEvaluate(expr) {
 }
 
 /**
- * Get or create preview element for a number input
- * @param {HTMLInputElement} input - The input element
- * @returns {HTMLElement} The preview element
+ * Check if a string contains mathematical operators
  */
-function getOrCreatePreview(input) {
-    let preview = input.parentElement.querySelector('.calc-preview');
-    if (!preview) {
-        preview = document.createElement('span');
-        preview.className = 'calc-preview';
-        preview.style.cssText = `
-            font-size: 0.7rem;
-            color: #28a745;
-            font-weight: 600;
-            margin-left: 6px;
-            opacity: 0;
-            transition: opacity 0.2s ease;
-            font-family: 'JetBrains Mono', monospace;
-            white-space: nowrap;
-        `;
-        input.parentElement.appendChild(preview);
-    }
-    return preview;
+function isExpression(value) {
+    if (!value || typeof value !== 'string') return false;
+    return /[+\-*/]/.test(value) && !/^[\d.]+$/.test(value);
 }
 
 /**
- * Update the real-time calculation preview
- * @param {HTMLInputElement} input - The input element
+ * Get the numeric value from an input (handles expressions)
+ */
+function getNumericValue(input) {
+    if (!input) return 0;
+    const val = input.value.trim();
+    if (!val) return 0;
+
+    if (isExpression(val)) {
+        const result = safeEvaluate(val);
+        return result !== null ? result : 0;
+    }
+
+    const num = parseFloat(val);
+    return !isNaN(num) && isFinite(num) ? num : 0;
+}
+
+/**
+ * Update covered percentage display
+ */
+function updateCoveredDisplay() {
+    const onlineInput = document.getElementById('onlineAmount');
+    const cashInput = document.getElementById('cashAmount');
+    const requiredInput = document.getElementById('requiredAmount');
+
+    if (!onlineInput || !cashInput || !requiredInput) return;
+
+    const online = getNumericValue(onlineInput);
+    const cash = getNumericValue(cashInput);
+    const required = getNumericValue(requiredInput);
+
+    const disp = document.getElementById('coveredDisplay');
+    if (disp) {
+        if (required > 0 && isFinite(required)) {
+            const percentage = ((online + cash) / required) * 100;
+            disp.value = isFinite(percentage) ? percentage.toFixed(4) + '%' : '0%';
+        } else {
+            disp.value = '0%';
+        }
+    }
+}
+
+/**
+ * Evaluate and set the final value for an input
+ */
+function evaluateAndSetValue(input) {
+    if (!input) return false;
+
+    const val = input.value.trim();
+    if (!val) {
+        input.value = '0';
+        input.className = input.className.replace(' valid', '').replace(' error', '');
+        updateCoveredDisplay();
+        return true;
+    }
+
+    if (isExpression(val)) {
+        const result = safeEvaluate(val);
+        if (result !== null && isFinite(result)) {
+            const displayVal = Number.isInteger(result) ? result.toString() : result.toFixed(4);
+            input.value = displayVal;
+            input.className = input.className.replace(' error', '');
+            showToast(`🧮 ${val} = ${displayVal}`, false);
+            updateCoveredDisplay();
+            return true;
+        } else {
+            input.className = input.className + ' error';
+            showToast('⚠️ Invalid expression: ' + val, true);
+            return false;
+        }
+    }
+
+    const num = parseFloat(val);
+    if (!isNaN(num) && isFinite(num)) {
+        input.value = num;
+    } else {
+        input.value = '0';
+    }
+    input.className = input.className.replace(' valid', '').replace(' error', '');
+    updateCoveredDisplay();
+    return true;
+}
+
+/**
+ * Show real-time preview of calculation
  */
 function updatePreview(input) {
     if (!input) return;
     
     const val = input.value.trim();
-    const preview = getOrCreatePreview(input);
+    let preview = input.parentElement.querySelector('.calc-preview');
     
-    // Check if it's an expression
-    if (/[+\-*/]/.test(val)) {
+    // Create preview if it doesn't exist
+    if (!preview) {
+        preview = document.createElement('span');
+        preview.className = 'calc-preview';
+        preview.style.cssText = `
+            font-size: 0.7rem;
+            font-weight: 600;
+            margin-left: 6px;
+            opacity: 0;
+            transition: opacity 0.2s ease;
+            font-family: monospace;
+            white-space: nowrap;
+            flex-shrink: 0;
+            min-width: 40px;
+        `;
+        input.parentElement.appendChild(preview);
+    }
+    
+    // Reset preview visibility when input is empty
+    if (!val) {
+        preview.textContent = '';
+        preview.style.opacity = '0';
+        input.className = input.className.replace(' valid', '').replace(' error', '');
+        return;
+    }
+    
+    // Update preview based on input
+    if (isExpression(val)) {
         const result = safeEvaluate(val);
-        if (result !== null) {
-            preview.textContent = `= ${result}`;
+        if (result !== null && isFinite(result)) {
+            const displayVal = Number.isInteger(result) ? result.toString() : result.toFixed(4);
+            preview.textContent = `= ${displayVal}`;
             preview.style.color = '#28a745';
             preview.style.opacity = '1';
-            preview.style.borderColor = '#28a745';
-            input.style.borderColor = '#28a745';
-            input.style.background = 'rgba(40, 167, 69, 0.05)';
+            input.className = input.className.replace(' error', '') + ' valid';
         } else {
-            preview.textContent = '⚠️ invalid';
+            preview.textContent = '⚠️';
             preview.style.color = '#dc3545';
             preview.style.opacity = '1';
-            input.style.borderColor = '#dc3545';
-            input.style.background = 'rgba(220, 53, 69, 0.05)';
+            input.className = input.className.replace(' valid', '') + ' error';
         }
     } else {
+        preview.textContent = '';
         preview.style.opacity = '0';
-        input.style.borderColor = '';
-        input.style.background = '';
-        
-        // Also update if it's a valid number
-        const num = parseFloat(val);
-        if (!isNaN(num) && val !== '') {
-            preview.textContent = `= ${num}`;
-            preview.style.color = '#6c757d';
-            preview.style.opacity = '0.5';
-        }
+        input.className = input.className.replace(' valid', '').replace(' error', '');
     }
-    
-    // Update covered percentage
-    updateCoveredDisplay();
 }
 
 /**
- * Evaluate and finalize a calculator input field (on Enter or Blur)
- * @param {HTMLInputElement} input - The input element to evaluate
+ * Clean up calculator for a single input (remove wrapper and preview)
  */
-function evaluateCalculatorInput(input) {
+function cleanupCalculator(input) {
     if (!input) return;
     
-    const val = input.value.trim();
-    const preview = input.parentElement.querySelector('.calc-preview');
+    // Remove calculator setup flag
+    delete input.dataset.calculatorSetup;
     
-    if (!val) {
-        input.value = '0';
-        if (preview) preview.style.opacity = '0';
-        updateCoveredDisplay();
-        return;
+    // Remove wrapper if it exists
+    const wrapper = input.parentElement;
+    if (wrapper && wrapper.classList && wrapper.classList.contains('calc-wrapper')) {
+        // Remove preview
+        const preview = wrapper.querySelector('.calc-preview');
+        if (preview) preview.remove();
+        
+        // Unwrap the input
+        wrapper.parentNode.insertBefore(input, wrapper);
+        wrapper.remove();
     }
     
-    // Check if it's an expression (contains operators)
-    if (/[+\-*/]/.test(val)) {
-        const result = safeEvaluate(val);
-        if (result !== null) {
-            const displayVal = Number.isInteger(result) ? result : result.toFixed(2);
-            input.value = displayVal;
-            if (preview) {
-                preview.textContent = `= ${displayVal}`;
-                preview.style.color = '#28a745';
-                preview.style.opacity = '0.7';
-            }
-            input.style.borderColor = '';
-            input.style.background = '';
-            showToast(`🧮 ${val} = ${displayVal}`, false);
-            updateCoveredDisplay();
-            return;
-        } else {
-            // If invalid expression, try to parse as number
-            const num = parseFloat(val);
-            if (!isNaN(num)) {
-                input.value = num;
-                updateCoveredDisplay();
-                return;
-            } else {
-                showToast('⚠️ Invalid expression: ' + val, true);
-                // Keep the original value so user can fix it
-                return;
-            }
-        }
-    } else {
-        // Just a number - validate
-        const num = parseFloat(val);
-        if (!isNaN(num)) {
-            input.value = num;
-        } else {
-            input.value = '0';
-        }
-        if (preview) preview.style.opacity = '0';
-        updateCoveredDisplay();
-        return;
-    }
+    // Reset input styles and classes
+    input.className = input.className.replace(' valid', '').replace(' error', '');
+    input.style.borderColor = '';
+    input.style.background = '';
 }
 
 /**
- * Setup calculator functionality on a single input element
- * @param {HTMLInputElement} input - The input element to enhance
+ * Clean up all calculator inputs
  */
-function setupCalculatorOnInput(input) {
-    if (!input || input.dataset.calculatorEnabled === 'true') return;
+function cleanupCalculatorInputs() {
+    const inputs = document.querySelectorAll('#onlineAmount, #cashAmount, #requiredAmount');
+    inputs.forEach(input => cleanupCalculator(input));
+}
+
+/**
+ * Setup calculator on a single input
+ */
+function setupCalculator(input) {
+    if (!input) return;
     
-    input.dataset.calculatorEnabled = 'true';
+    // Skip if already setup
+    if (input.dataset.calculatorSetup === 'true') return;
+    input.dataset.calculatorSetup = 'true';
     
-    // Create wrapper for input + preview
-    const wrapper = document.createElement('div');
-    wrapper.style.cssText = `
-        display: flex;
-        align-items: center;
-        gap: 4px;
-        position: relative;
-        width: 100%;
-    `;
+    // Ensure input has a wrapper for preview
+    let wrapper = input.parentElement;
+    if (!wrapper.classList || !wrapper.classList.contains('calc-wrapper')) {
+        wrapper = document.createElement('div');
+        wrapper.className = 'calc-wrapper';
+        wrapper.style.cssText = `
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            width: 100%;
+        `;
+        input.parentNode.insertBefore(wrapper, input);
+        wrapper.appendChild(input);
+    }
     
-    // Wrap the input
-    input.parentNode.insertBefore(wrapper, input);
-    wrapper.appendChild(input);
-    
-    // Create preview element
-    const preview = document.createElement('span');
-    preview.className = 'calc-preview';
-    preview.style.cssText = `
-        font-size: 0.7rem;
-        color: #28a745;
-        font-weight: 600;
-        margin-left: 4px;
-        opacity: 0;
-        transition: all 0.2s ease;
-        font-family: 'JetBrains Mono', monospace;
-        white-space: nowrap;
-        min-width: 40px;
-        flex-shrink: 0;
-    `;
-    wrapper.appendChild(preview);
-    
-    // Update input styles
-    input.style.flex = '1';
-    input.style.minWidth = '0';
-    
-    // Handle real-time input - update preview as user types
+    let previewTimeout = null;
     input.addEventListener('input', function() {
-        const val = this.value.trim();
-        const previewEl = this.parentElement.querySelector('.calc-preview');
-        
-        // Check if it's an expression
-        if (/[+\-*/]/.test(val)) {
-            const result = safeEvaluate(val);
-            if (result !== null) {
-                const displayVal = Number.isInteger(result) ? result : result.toFixed(2);
-                previewEl.textContent = `= ${displayVal}`;
-                previewEl.style.color = '#28a745';
-                previewEl.style.opacity = '1';
-                this.style.borderColor = '#28a745';
-                this.style.background = 'rgba(40, 167, 69, 0.05)';
-            } else {
-                previewEl.textContent = '⚠️';
-                previewEl.style.color = '#dc3545';
-                previewEl.style.opacity = '1';
-                this.style.borderColor = '#dc3545';
-                this.style.background = 'rgba(220, 53, 69, 0.05)';
-            }
-        } else {
-            previewEl.style.opacity = '0';
-            this.style.borderColor = '';
-            this.style.background = '';
-        }
-        
-        updateCoveredDisplay();
+        clearTimeout(previewTimeout);
+        previewTimeout = setTimeout(() => {
+            updatePreview(this);
+            updateCoveredDisplay();
+        }, 100);
     });
     
-    // Handle Enter key - evaluate and finalize
     input.addEventListener('keydown', function(e) {
         if (e.key === 'Enter') {
             e.preventDefault();
-            evaluateCalculatorInput(this);
-            // Move to next field
-            const inputs = document.querySelectorAll('#onlineAmount, #cashAmount, #requiredAmount');
-            const currentIndex = Array.from(inputs).indexOf(this);
-            if (currentIndex < inputs.length - 1) {
-                inputs[currentIndex + 1].focus();
+            evaluateAndSetValue(this);
+            const inputs = ['onlineAmount', 'cashAmount', 'requiredAmount'];
+            const currentId = this.id;
+            const currentIndex = inputs.indexOf(currentId);
+            if (currentIndex >= 0 && currentIndex < inputs.length - 1) {
+                const nextInput = document.getElementById(inputs[currentIndex + 1]);
+                if (nextInput) nextInput.focus();
             }
         }
     });
     
-    // Handle blur - evaluate and finalize
     input.addEventListener('blur', function() {
-        evaluateCalculatorInput(this);
+        evaluateAndSetValue(this);
     });
     
-    // Handle focus - select all text for easy editing
     input.addEventListener('focus', function() {
         this.select();
     });
 }
 
 /**
- * Setup calculator functionality on all number input fields
- * This should be called whenever the form is opened
+ * Setup all calculator inputs with fresh state
  */
 function setupCalculatorInputs() {
-    // Get all number input fields in the form
-    const numberInputs = document.querySelectorAll('#onlineAmount, #cashAmount, #requiredAmount');
+    // First cleanup any existing calculator state
+    cleanupCalculatorInputs();
     
-    numberInputs.forEach(input => {
-        // Check if already setup (by checking if parent is wrapper)
-        if (input.parentElement.classList?.contains('calc-wrapper')) {
-            return;
+    // Then setup fresh
+    const inputs = document.querySelectorAll('#onlineAmount, #cashAmount, #requiredAmount');
+    inputs.forEach(input => {
+        // Reset value if it's 0 (keep existing values for edit mode)
+        if (input.value === '0') {
+            input.value = '0';
         }
-        setupCalculatorOnInput(input);
+        setupCalculator(input);
     });
 }
 
@@ -507,17 +494,10 @@ function setupCalculatorInputs() {
 // TABLE RENDERER
 // ============================================================
 
-/**
- * Render the main reserve table with current data
- * Groups items by category and applies search filter
- */
 function renderTable() {
     if (!dom.tableBody) return;
 
-    // Filter out the system config item
     const items = state.reserves.filter(r => r.item !== '__UPI_CONFIG__');
-
-    // Apply search filter
     const search = state.searchTerm.toLowerCase().trim();
     let filtered = items;
     if (search) {
@@ -528,7 +508,6 @@ function renderTable() {
         );
     }
 
-    // Group items by category
     const groups = new Map();
     filtered.forEach(r => {
         const cat = r.category || 'General';
@@ -536,7 +515,6 @@ function renderTable() {
         groups.get(cat).push(r);
     });
 
-    // Build HTML
     let html = '';
     let totalOnline = 0;
     let totalCash = 0;
@@ -546,10 +524,8 @@ function renderTable() {
             search ? 'No items match your search.' : 'No reserves. Add your first reserve!'
         }</td></tr>`;
     } else {
-        // Iterate over categories
         for (const [category, categoryItems] of groups) {
             html += `<tr class="category-header"><td colspan="7"><i class="fas fa-folder-open"></i> ${category} (${categoryItems.length})</td></tr>`;
-
             let seq = 0;
             for (const r of categoryItems) {
                 seq++;
@@ -563,7 +539,7 @@ function renderTable() {
                 const hasMore = desc.length > 100;
 
                 html += `<tr>
-                    <td style="text-align:center;font-weight:600;color:#1a4a62;">${seq}</td>
+                    <td style="text-align:center;font-weight:600;color:var(--text-secondary);">${seq}</td>
                     <td class="col-item">
                         <span class="badge">${r.id}</span>
                         <span class="item-link" data-id="${r.id}">${r.item}</span>
@@ -582,14 +558,12 @@ function renderTable() {
         }
     }
 
-    // Update DOM
     dom.tableBody.innerHTML = html;
     dom.itemCount.textContent = filtered.length;
     dom.totalOnline.textContent = totalOnline.toLocaleString('en-IN');
     dom.totalCash.textContent = totalCash.toLocaleString('en-IN');
     dom.totalReserves.textContent = (totalOnline + totalCash).toLocaleString('en-IN');
 
-    // Attach click events for item links and expand hints
     document.querySelectorAll('.item-link, .expand-hint').forEach(el => {
         el.onclick = function(e) {
             e.stopPropagation();
@@ -600,28 +574,22 @@ function renderTable() {
 }
 
 // ============================================================
-// ACTIONS LIST RENDERER
+// RENDER ACTIONS
 // ============================================================
 
-/**
- * Render the actions/tasks list in the actions modal
- * Updates the badge with pending action count
- */
 function renderActions() {
     const list = dom.actionsList;
     const badge = dom.actionsBadge;
     if (!list) return;
 
-    // Update badge
     const pending = state.actions.filter(a => !a.completed).length;
     if (badge) {
         badge.textContent = pending;
         badge.style.display = pending > 0 ? 'inline-flex' : 'none';
     }
 
-    // Render actions
     if (state.actions.length === 0) {
-        list.innerHTML = `<div style="padding:1rem;text-align:center;color:#6c757d;">
+        list.innerHTML = `<div style="padding:1rem;text-align:center;color:var(--text-muted);">
             <i class="fas fa-check-circle" style="font-size:1.5rem;display:block;margin-bottom:0.5rem;"></i>
             No pending actions. Add one below!
         </div>`;
@@ -645,16 +613,11 @@ function renderActions() {
 // UPI LIST RENDERER
 // ============================================================
 
-/**
- * Render the UPI IDs list in the UPI modal
- * Updates the selector dropdown and tag list
- */
 function renderUpiList() {
     const sel = document.getElementById('upiSelector');
     const list = document.getElementById('savedUpiList');
     if (!sel || !list) return;
 
-    // Populate dropdown
     sel.innerHTML = '';
     if (state.upiIds.length === 0) {
         const opt = document.createElement('option');
@@ -671,14 +634,12 @@ function renderUpiList() {
         sel.value = state.upiDefault || state.upiIds[0] || '';
     }
 
-    // Populate tag list
     list.innerHTML = '';
     state.upiIds.forEach(id => {
         const tag = document.createElement('span');
         tag.className = 'upi-tag';
         tag.innerHTML = `${id} <span class="remove-tag" data-upi="${id}"><i class="fas fa-times-circle"></i></span>`;
 
-        // Remove handler
         tag.querySelector('.remove-tag').addEventListener('click', (e) => {
             e.stopPropagation();
             if (confirm(`Remove UPI ID "${id}"?`)) {
@@ -690,7 +651,6 @@ function renderUpiList() {
             }
         });
 
-        // Select handler
         tag.addEventListener('click', () => {
             state.upiDefault = id;
             sel.value = id;
@@ -701,10 +661,9 @@ function renderUpiList() {
     });
 
     if (state.upiIds.length === 0) {
-        list.innerHTML = '<span style="color:#6c757d;font-size:0.8rem;padding:0.3rem;">No UPI IDs. Add one below.</span>';
+        list.innerHTML = '<span style="color:var(--text-muted);font-size:0.8rem;padding:0.3rem;">No UPI IDs. Add one below.</span>';
     }
 
-    // Update display
     const selected = sel.value || state.upiIds[0] || '';
     state.upiDefault = selected;
     document.getElementById('upiIdDisplay').textContent = selected || '-';
@@ -714,20 +673,15 @@ function renderUpiList() {
 // QR CODE GENERATOR
 // ============================================================
 
-/** QRCode instance reference for cleanup */
 let qrInstance = null;
 
-/**
- * Generate a UPI QR code based on the selected UPI ID and amount
- * Uses the QRCode.js library
- */
 function generateQR() {
     const upi = document.getElementById('upiSelector')?.value || state.upiIds[0] || '';
     const container = document.getElementById('qrcode');
     if (!container) return;
 
     if (!upi) {
-        container.innerHTML = '<p style="color:#6f8fa3;padding:0.5rem;">No UPI ID available</p>';
+        container.innerHTML = '<p style="color:var(--text-muted);padding:0.5rem;">No UPI ID available</p>';
         document.getElementById('upiIdDisplay').textContent = '-';
         return;
     }
@@ -739,21 +693,18 @@ function generateQR() {
 
     let amtParam = '';
     let amtDisplay = 'User decides';
-    if (!isNaN(amt) && amt > 0) {
+    if (!isNaN(amt) && amt > 0 && isFinite(amt)) {
         amtParam = '&am=' + amt.toFixed(2);
         amtDisplay = '₹' + amt.toFixed(2);
     }
 
-    // Update details display
     document.getElementById('upiIdDisplay').textContent = upi;
     document.getElementById('upiAmountDisplay').textContent = amtDisplay;
     document.getElementById('upiPayeeDisplay').textContent = payee;
     document.getElementById('upiNoteDisplay').textContent = note;
 
-    // Build UPI URI
     const uri = `upi://pay?pa=${upi}&pn=${encodeURIComponent(payee)}${amtParam}&cu=INR&tn=${encodeURIComponent(note)}`;
 
-    // Generate QR code
     container.innerHTML = '';
     try {
         qrInstance = new QRCode(container, {
@@ -771,13 +722,9 @@ function generateQR() {
 }
 
 // ============================================================
-// DETAIL CARD MODAL
+// DETAIL CARD
 // ============================================================
 
-/**
- * Open the detail card modal for a specific reserve item
- * @param {number} id - ID of the reserve item to display
- */
 function openDetail(id) {
     const item = state.reserves.find(r => r.id === id);
     if (!item) {
@@ -817,21 +764,17 @@ function openDetail(id) {
     document.getElementById('cardOverlay').classList.add('active');
 }
 
-/**
- * Close the detail card modal
- */
 function closeDetail() {
     document.getElementById('cardOverlay').classList.remove('active');
     state.selectedId = null;
 }
 
 // ============================================================
-// FORM MODAL (ADD / EDIT)
+// FORM MODAL
 // ============================================================
 
 /**
  * Open the add/edit form modal
- * @param {Object|null} editItem - Item to edit, or null for add mode
  */
 function openForm(editItem = null) {
     state.editId = editItem ? editItem.id : null;
@@ -846,8 +789,9 @@ function openForm(editItem = null) {
     const required = document.getElementById('requiredAmount');
     const desc = document.getElementById('descText');
 
+    // Reset all inputs to fresh state
     if (editItem) {
-        name.value = editItem.item;
+        name.value = editItem.item || '';
         cat.value = editItem.category || 'General';
         online.value = editItem.online || 0;
         cash.value = editItem.cash || 0;
@@ -862,84 +806,54 @@ function openForm(editItem = null) {
         desc.value = '';
     }
 
+    // Reset any visual styles and remove calculator state
+    [online, cash, required].forEach(input => {
+        input.style.borderColor = '';
+        input.style.background = '';
+        input.className = input.className.replace(' valid', '').replace(' error', '');
+        // Remove any old calculator state
+        delete input.dataset.calculatorSetup;
+    });
+
     updateCoveredDisplay();
     document.getElementById('formOverlay').classList.add('active');
     
-    // IMPORTANT: Setup calculator inputs AFTER the form is opened
-    // Use a small delay to ensure DOM is fully rendered
+    // Setup calculator inputs after form is shown with a clean slate
     setTimeout(() => {
         setupCalculatorInputs();
-    }, 50);
+    }, 100);
 }
 
 /**
  * Close the add/edit form modal
  */
 function closeForm() {
+    // Clean up calculator state before closing
+    cleanupCalculatorInputs();
+    
     document.getElementById('formOverlay').classList.remove('active');
     state.editId = null;
-}
-
-/**
- * Update the covered percentage display based on form inputs
- * This function now safely handles expressions by parsing the values
- */
-function updateCoveredDisplay() {
-    const onlineInput = document.getElementById('onlineAmount');
-    const cashInput = document.getElementById('cashAmount');
-    const requiredInput = document.getElementById('requiredAmount');
-    
-    // Get raw values - they might be expressions
-    const onlineRaw = onlineInput?.value || '0';
-    const cashRaw = cashInput?.value || '0';
-    const requiredRaw = requiredInput?.value || '0';
-    
-    // Try to evaluate the values if they are expressions
-    let online = parseFloat(onlineRaw);
-    let cash = parseFloat(cashRaw);
-    let required = parseFloat(requiredRaw);
-    
-    // If parsing failed and it contains operators, try to evaluate
-    if (isNaN(online) && /[+\-*/]/.test(onlineRaw)) {
-        const result = safeEvaluate(onlineRaw);
-        if (result !== null) online = result;
-    }
-    if (isNaN(cash) && /[+\-*/]/.test(cashRaw)) {
-        const result = safeEvaluate(cashRaw);
-        if (result !== null) cash = result;
-    }
-    if (isNaN(required) && /[+\-*/]/.test(requiredRaw)) {
-        const result = safeEvaluate(requiredRaw);
-        if (result !== null) required = result;
-    }
-    
-    // If still NaN, default to 0
-    if (isNaN(online)) online = 0;
-    if (isNaN(cash)) cash = 0;
-    if (isNaN(required)) required = 0;
-    
-    const disp = document.getElementById('coveredDisplay');
-    if (disp) {
-        disp.value = required > 0 ? ((online + cash) / required * 100).toFixed(4) + '%' : '0%';
-    }
 }
 
 // ============================================================
 // CRUD OPERATIONS
 // ============================================================
 
-/**
- * Save a reserve item (add new or update existing)
- * @param {Event} e - Form submit event
- */
 function saveReserve(e) {
     e.preventDefault();
 
-    // Evaluate any pending expressions before saving
-    const numberInputs = document.querySelectorAll('#onlineAmount, #cashAmount, #requiredAmount');
-    numberInputs.forEach(input => {
-        evaluateCalculatorInput(input);
+    // Evaluate all number inputs before saving
+    const inputs = document.querySelectorAll('#onlineAmount, #cashAmount, #requiredAmount');
+    let allValid = true;
+    inputs.forEach(input => {
+        const valid = evaluateAndSetValue(input);
+        if (!valid) allValid = false;
     });
+
+    if (!allValid) {
+        showToast('⚠️ Please fix invalid expressions before saving', true);
+        return;
+    }
 
     const name = document.getElementById('itemName').value.trim();
     if (!name) {
@@ -948,23 +862,31 @@ function saveReserve(e) {
     }
 
     const category = document.getElementById('categoryInput').value.trim() || 'General';
+    const online = parseFloat(document.getElementById('onlineAmount').value) || 0;
+    const cash = parseFloat(document.getElementById('cashAmount').value) || 0;
+    const required = parseFloat(document.getElementById('requiredAmount').value) || 0;
+
+    // Validate numbers
+    if (!isFinite(online) || !isFinite(cash) || !isFinite(required)) {
+        showToast('⚠️ Invalid numeric values detected', true);
+        return;
+    }
+
     const data = {
         item: name,
         category: category,
-        online: parseFloat(document.getElementById('onlineAmount').value) || 0,
-        cash: parseFloat(document.getElementById('cashAmount').value) || 0,
-        required: parseFloat(document.getElementById('requiredAmount').value) || 0,
+        online: online,
+        cash: cash,
+        required: required,
         desc: document.getElementById('descText').value.trim() || ''
     };
 
     if (state.editId !== null) {
-        // Edit mode - update existing item
         const idx = state.reserves.findIndex(r => r.id === state.editId);
         if (idx !== -1) {
             state.reserves[idx] = { ...state.reserves[idx], ...data };
         }
     } else {
-        // Add mode - create new item
         data.id = state.nextId++;
         state.reserves.push(data);
     }
@@ -975,15 +897,10 @@ function saveReserve(e) {
     showToast('✅ Item saved successfully');
 }
 
-/**
- * Delete the currently selected reserve item
- */
 function deleteReserve() {
     if (state.selectedId === null) return;
-
     const item = state.reserves.find(r => r.id === state.selectedId);
     if (!item) return;
-
     if (!confirm(`Delete "${item.item}"?`)) return;
 
     state.reserves = state.reserves.filter(r => r.id !== state.selectedId);
@@ -994,13 +911,9 @@ function deleteReserve() {
 }
 
 // ============================================================
-// ACTION (TASK) OPERATIONS
+// ACTION OPERATIONS
 // ============================================================
 
-/**
- * Toggle the completion status of an action
- * @param {number} index - Index of the action in the actions array
- */
 window.toggleAction = function(index) {
     if (index >= 0 && index < state.actions.length) {
         state.actions[index].completed = !state.actions[index].completed;
@@ -1010,10 +923,6 @@ window.toggleAction = function(index) {
     }
 };
 
-/**
- * Delete an action from the list
- * @param {number} index - Index of the action in the actions array
- */
 window.deleteAction = function(index) {
     if (index >= 0 && index < state.actions.length) {
         if (confirm(`Delete action "${state.actions[index].text}"?`)) {
@@ -1025,9 +934,6 @@ window.deleteAction = function(index) {
     }
 };
 
-/**
- * Add a new action from the input field
- */
 function addAction() {
     const input = document.getElementById('newActionInput');
     const text = input.value.trim();
@@ -1052,9 +958,6 @@ function addAction() {
 // UPI OPERATIONS
 // ============================================================
 
-/**
- * Add a new UPI ID from the input field
- */
 function addUpiId() {
     const input = document.getElementById('newUpiInput');
     const id = input.value.trim();
@@ -1077,9 +980,6 @@ function addUpiId() {
     showToast('✅ UPI ID added');
 }
 
-/**
- * Remove the selected UPI ID
- */
 function removeUpiId() {
     const sel = document.getElementById('upiSelector');
     const selected = sel.value;
@@ -1103,16 +1003,12 @@ function removeUpiId() {
 // DATA EXPORT / IMPORT
 // ============================================================
 
-/**
- * Export all data as a JSON file download
- */
 function exportData() {
     if (state.reserves.length === 0) {
         showToast('No data to export.', true);
         return;
     }
 
-    // Include system configuration
     const config = {
         id: Date.now(),
         item: '__UPI_CONFIG__',
@@ -1141,10 +1037,6 @@ function exportData() {
     showToast('📥 JSON exported successfully');
 }
 
-/**
- * Import data from a JSON file
- * @param {File} file - The JSON file to import
- */
 function importData(file) {
     const reader = new FileReader();
 
@@ -1161,7 +1053,6 @@ function importData(file) {
                 return;
             }
 
-            // Extract configuration
             const config = parsed.find(r => r.item === '__UPI_CONFIG__');
             if (config && config.desc) {
                 try {
@@ -1180,13 +1071,11 @@ function importData(file) {
                 }
             }
 
-            // Load reserves
             state.reserves = parsed.filter(r => r.item !== '__UPI_CONFIG__');
             state.reserves.forEach(r => {
                 if (!r.category) r.category = 'General';
             });
 
-            // Update next ID
             const maxId = state.reserves.reduce((max, r) => Math.max(max, r.id || 0), 0);
             state.nextId = maxId + 1;
 
@@ -1203,73 +1092,32 @@ function importData(file) {
 }
 
 // ============================================================
-// CLOUD SYNCHRONIZATION - PER USER DATA
+// CLOUD SYNCHRONIZATION
 // ============================================================
 
-/**
- * Get the Firestore document reference for the current user's data
- * Each user gets their own sub-collection under users/{uid}/data/main
- * 
- * DATA STRUCTURE:
- * users/{userId}/data/main
- *   - reserves: Array of reserve items
- *   - updatedAt: Server timestamp
- *   - lastSync: ISO string
- *   - userId: string
- *   - userEmail: string
- * 
- * @returns {firebase.firestore.DocumentReference|null}
- */
 function getUserDocRef() {
-    if (!auth?.currentUser) {
-        console.log('⏳ No user signed in');
-        return null;
-    }
-    // Use sub-collection per user for better security and isolation
+    if (!auth?.currentUser) return null;
     return db.collection('users').doc(auth.currentUser.uid).collection('data').doc('main');
 }
 
-/**
- * Trigger a sync with the Firestore server for the current user
- * Pushes local data and checks for server updates
- */
 async function triggerSync() {
-    // Guard conditions
-    if (!auth?.currentUser) {
-        console.log('⏳ Not signed in, skipping sync');
-        return;
-    }
-    if (state.isSyncing) {
-        console.log('⏳ Sync already in progress');
-        return;
-    }
-    if (!state.isLoaded) {
-        console.log('⏳ Data not loaded, skipping sync');
-        return;
-    }
+    if (!auth?.currentUser || state.isSyncing || !state.isLoaded) return;
 
     state.isSyncing = true;
     setSyncStatus('syncing', 'Syncing...');
 
     try {
         const docRef = getUserDocRef();
-        if (!docRef) {
-            state.isSyncing = false;
-            return;
-        }
+        if (!docRef) { state.isSyncing = false; return; }
 
-        // Check for server updates
         const snap = await docRef.get({ source: 'server' });
         if (snap.exists) {
             const data = snap.data();
             const serverTs = data.updatedAt || data.lastSync;
-
             if (serverTs && state.serverTimestamp) {
                 const sDate = new Date(serverTs);
                 const lDate = new Date(state.serverTimestamp);
-
                 if (sDate > lDate) {
-                    // Server has newer data - reload
                     await loadFromServer(true);
                     state.isSyncing = false;
                     return;
@@ -1277,7 +1125,6 @@ async function triggerSync() {
             }
         }
 
-        // Push local data to server
         const config = {
             id: Date.now(),
             item: '__UPI_CONFIG__',
@@ -1314,10 +1161,6 @@ async function triggerSync() {
     state.isSyncing = false;
 }
 
-/**
- * Load data from the Firestore server for the current user
- * @param {boolean} silent - Whether to suppress user-facing notifications
- */
 async function loadFromServer(silent = false) {
     if (!db) {
         setSyncStatus('error', 'Firebase not available');
@@ -1352,7 +1195,6 @@ async function loadFromServer(silent = false) {
             state.serverTimestamp = data.updatedAt || data.lastSync || new Date().toISOString();
             const reserves = data.reserves || [];
 
-            // Extract system configuration
             const config = reserves.find(r => r.item === '__UPI_CONFIG__');
             if (config && config.desc) {
                 try {
@@ -1371,7 +1213,6 @@ async function loadFromServer(silent = false) {
                 }
             }
 
-            // Load reserves
             state.reserves = reserves.filter(r => r.item !== '__UPI_CONFIG__');
             state.reserves.forEach(r => {
                 if (!r.category) r.category = 'General';
@@ -1382,17 +1223,14 @@ async function loadFromServer(silent = false) {
             state.isLoaded = true;
 
             renderTable();
-            // FIX #1: Removed email from sync status display
             setSyncStatus('synced', `${state.reserves.length} items loaded`);
             if (!silent) showToast(`✅ Loaded ${state.reserves.length} items from your account`);
 
         } else {
-            // No data on server - start fresh for this user
             state.reserves = [];
             state.nextId = 1;
             state.isLoaded = true;
 
-            // Initialize empty document for this user
             await docRef.set({
                 reserves: [],
                 updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
@@ -1403,7 +1241,6 @@ async function loadFromServer(silent = false) {
             });
 
             renderTable();
-            // FIX #1: Removed email from sync status display
             setSyncStatus('synced', 'Ready (empty)');
             if (!silent) showToast('📭 No data found for your account');
         }
@@ -1421,9 +1258,6 @@ async function loadFromServer(silent = false) {
 // GOOGLE SIGN-IN / SIGN-OUT
 // ============================================================
 
-/**
- * Sign in with Google using Firebase Auth popup
- */
 async function signInWithGoogle() {
     if (!auth) {
         dom.authError.textContent = 'Firebase Auth not available';
@@ -1440,17 +1274,12 @@ async function signInWithGoogle() {
         dom.authOverlay.classList.add('hidden');
         dom.app.style.display = 'flex';
 
-        // Update user display
         if (dom.userDisplay) {
             dom.userDisplay.textContent = `👤 ${result.user.displayName || result.user.email}`;
         }
 
-        // Load data after sign-in
         await loadFromServer(false);
-
-        // Set up periodic sync
         setupAutoSync();
-
         showToast('✅ Signed in as ' + (result.user.displayName || result.user.email));
 
     } catch (error) {
@@ -1459,9 +1288,6 @@ async function signInWithGoogle() {
     }
 }
 
-/**
- * Sign out the current user
- */
 function signOut() {
     if (!auth) return;
 
@@ -1485,28 +1311,19 @@ function signOut() {
         });
 }
 
-/**
- * Set up automatic synchronization
- * - Interval-based sync every 30 seconds
- * - Sync on page visibility change
- * - Sync before page unload
- */
 function setupAutoSync() {
-    // Periodic sync
     setInterval(() => {
         if (auth?.currentUser && state.isLoaded && !state.isSyncing) {
             triggerSync();
         }
     }, 30000);
 
-    // Visibility change sync
     document.addEventListener('visibilitychange', () => {
         if (!document.hidden && auth?.currentUser && state.isLoaded && !state.isSyncing) {
             triggerSync();
         }
     });
 
-    // Before unload sync
     window.addEventListener('beforeunload', () => {
         if (auth?.currentUser && state.isLoaded && !state.isSyncing) {
             triggerSync();
@@ -1515,54 +1332,39 @@ function setupAutoSync() {
 }
 
 // ============================================================
-// AUTH STATE CHANGE HANDLER (Session Persistence)
+// AUTH STATE CHANGE HANDLER
 // ============================================================
 
-/**
- * Handle Firebase Auth state changes
- * This ensures the user stays logged in across page reloads
- * and properly restores the session
- */
 function handleAuthStateChange(user) {
     if (user) {
-        // User is signed in - restore session
         console.log('✅ User authenticated:', user.email);
         state.user = user;
-        authReady = true;
         
-        // Show app, hide auth overlay
         dom.authOverlay.classList.add('hidden');
         dom.app.style.display = 'flex';
         
-        // Update user display
         if (dom.userDisplay) {
             dom.userDisplay.textContent = `👤 ${user.displayName || user.email}`;
         }
         
-        // Load data if not already loaded
         if (!state.isLoaded) {
             loadFromServer(false).then(() => {
                 setupAutoSync();
             });
         }
     } else {
-        // User is signed out
         console.log('🔒 User signed out');
-        authReady = true;
         
-        // Only reset if we're not in the middle of a sign-in
         if (!dom.authOverlay.classList.contains('hidden')) {
             return;
         }
         
-        // Reset state
         state.user = null;
         state.isLoaded = false;
         state.reserves = [];
         state.upiIds = [];
         state.actions = [];
         
-        // Show auth overlay, hide app
         dom.app.style.display = 'none';
         dom.authOverlay.classList.remove('hidden');
         if (dom.userDisplay) {
@@ -1573,69 +1375,39 @@ function handleAuthStateChange(user) {
 }
 
 // ============================================================
-// FIREBASE SECURITY RULES (MUST BE SET UP IN FIREBASE CONSOLE)
-// ============================================================
-/**
- * ================================================================
- * FIREBASE SECURITY RULES - Copy this to Firebase Console
- * ================================================================
- * 
- * rules_version = '2';
- * service cloud.firestore {
- *   match /databases/{database}/documents {
- *     // Users can only access their own data
- *     match /users/{userId}/{document=**} {
- *       allow read, write: if request.auth != null && request.auth.uid == userId;
- *     }
- *     
- *     // Deny access to the root users collection
- *     match /users/{userId} {
- *       allow read, write: if false;
- *     }
- *     
- *     // Deny access to any other collections
- *     match /{document=**} {
- *       allow read, write: if false;
- *     }
- *   }
- * }
- * ================================================================
- */
-
-// ============================================================
 // INITIALIZATION
 // ============================================================
 
-/**
- * Initialize the application - set up all event listeners and UI
- */
 function initApp() {
-    // ---------- SETUP AUTH STATE LISTENER (Session Persistence) ----------
+    // Load theme first
+    loadTheme();
+
+    // Auth state listener
     if (auth) {
-        // Listen for auth state changes - this handles session restoration
         auth.onAuthStateChanged(handleAuthStateChange);
     } else {
-        console.warn('⚠️ Auth not available, session persistence disabled');
-        // Fallback: show auth overlay
+        console.warn('⚠️ Auth not available');
         dom.authOverlay.classList.remove('hidden');
         dom.app.style.display = 'none';
     }
 
-    // ---------- AUTH BUTTONS ----------
+    // Theme toggle
+    if (dom.themeToggle) {
+        dom.themeToggle.addEventListener('click', toggleTheme);
+    }
+
+    // Auth buttons
     dom.googleSignInBtn.addEventListener('click', signInWithGoogle);
     dom.signOutBtn.addEventListener('click', signOut);
 
-    // ---------- SEARCH ----------
+    // Search with clear button
     dom.searchInput.addEventListener('input', function() {
         state.searchTerm = this.value;
         renderTable();
     });
-    
-    // FIX #2: Add clear search button functionality
-    // Create clear button for search
+
     const searchContainer = dom.searchInput?.closest('.search-container');
     if (searchContainer) {
-        // Check if clear button already exists
         let clearBtn = searchContainer.querySelector('.search-clear-btn');
         if (!clearBtn) {
             clearBtn = document.createElement('button');
@@ -1644,7 +1416,7 @@ function initApp() {
             clearBtn.style.cssText = `
                 background: none;
                 border: none;
-                color: #6f8fa3;
+                color: var(--text-muted);
                 cursor: pointer;
                 padding: 0 6px;
                 font-size: 0.9rem;
@@ -1657,20 +1429,15 @@ function initApp() {
                 this.style.display = 'none';
                 dom.searchInput.focus();
             });
-            
-            // Add hover effect
             clearBtn.addEventListener('mouseenter', function() {
                 this.style.color = '#dc3545';
             });
             clearBtn.addEventListener('mouseleave', function() {
-                this.style.color = '#6f8fa3';
+                this.style.color = 'var(--text-muted)';
             });
-            
-            // Insert after search input
             searchContainer.appendChild(clearBtn);
         }
-        
-        // Show/hide clear button based on input content
+
         dom.searchInput.addEventListener('input', function() {
             const clearBtn = searchContainer.querySelector('.search-clear-btn');
             if (clearBtn) {
@@ -1679,22 +1446,17 @@ function initApp() {
         });
     }
 
-    // ---------- ADD RESERVE ----------
+    // Add Reserve
     dom.addBtn.addEventListener('click', () => openForm(null));
 
-    // ---------- FORM ----------
+    // Form
     document.getElementById('formCloseBtn').addEventListener('click', closeForm);
     document.getElementById('formOverlay').addEventListener('click', (e) => {
         if (e.target === e.currentTarget) closeForm();
     });
     document.getElementById('reserveForm').addEventListener('submit', saveReserve);
 
-    // Covered % auto-update - use the enhanced version
-    document.getElementById('onlineAmount').addEventListener('input', updateCoveredDisplay);
-    document.getElementById('cashAmount').addEventListener('input', updateCoveredDisplay);
-    document.getElementById('requiredAmount').addEventListener('input', updateCoveredDisplay);
-
-    // ---------- DETAIL CARD ----------
+    // Detail Card
     document.getElementById('cardCloseBtn').addEventListener('click', closeDetail);
     document.getElementById('cardCloseActionBtn').addEventListener('click', closeDetail);
     document.getElementById('cardOverlay').addEventListener('click', (e) => {
@@ -1712,7 +1474,7 @@ function initApp() {
 
     document.getElementById('cardDeleteBtn').addEventListener('click', deleteReserve);
 
-    // ---------- ACTIONS ----------
+    // Actions
     dom.actionsBtn.addEventListener('click', () => {
         renderActions();
         document.getElementById('actionsOverlay').classList.add('active');
@@ -1733,7 +1495,7 @@ function initApp() {
         if (e.key === 'Enter') addAction();
     });
 
-    // ---------- UPI ----------
+    // UPI
     dom.upiBtn.addEventListener('click', () => {
         renderUpiList();
         if (state.upiIds.length > 0) {
@@ -1769,7 +1531,7 @@ function initApp() {
     document.getElementById('upiSelector').addEventListener('change', generateQR);
     document.getElementById('upiAmountInput').addEventListener('input', generateQR);
 
-    // ---------- EXPORT / IMPORT ----------
+    // Export / Import
     dom.exportBtn.addEventListener('click', exportData);
 
     dom.importBtn.addEventListener('click', () => {
@@ -1786,7 +1548,7 @@ function initApp() {
         }
     });
 
-    // ---------- DRAG & DROP ----------
+    // Drag & Drop
     let dragCounter = 0;
 
     dom.app.addEventListener('dragenter', (e) => {
@@ -1821,7 +1583,7 @@ function initApp() {
         }
     }, { passive: false });
 
-    // ---------- KEYBOARD SHORTCUTS ----------
+    // Keyboard shortcuts
     document.addEventListener('keydown', (e) => {
         if (e.key === 'Escape') {
             if (document.getElementById('cardOverlay').classList.contains('active')) closeDetail();
@@ -1842,14 +1604,8 @@ function initApp() {
 // APPLICATION START
 // ============================================================
 
-/**
- * Start the application when DOM is ready
- */
 document.addEventListener('DOMContentLoaded', () => {
-    // Initially show auth overlay, hide app
     dom.app.style.display = 'none';
     dom.authOverlay.classList.remove('hidden');
-    
-    // Initialize the app
     initApp();
 });
