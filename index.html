@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="light">
 <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -7,6 +7,7 @@
 
     <!-- External Libraries -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" />
+    <link rel="stylesheet" href="styles.css" />
     <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js">
     </script>
     <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js">
@@ -15,10 +16,8 @@
     </script>
     <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js">
     </script>
-
-    <!-- Styles -->
-    <link rel="stylesheet" href="styles.css" />
 </head>
+
 <body>
 
     <!-- ============================================================ -->
@@ -58,7 +57,10 @@
                     Backup Reserve Manager
                 </h1>
                 <div class="header-actions">
-                    <span id="userDisplay" style="font-size:0.8rem;color:#1a4057;font-weight:500;margin-right:8px;"></span>
+                    <span id="userDisplay" style="font-size:0.8rem;color:var(--text-primary);font-weight:500;margin-right:8px;"></span>
+                    <button class="btn btn-theme" id="themeToggle" title="Toggle Theme">
+                        <i class="fas fa-moon"></i>
+                    </button>
                     <span class="drop-hint">
                         <i class="fas fa-cloud-upload-alt"></i> Drag &amp; drop .json
                     </span>
@@ -72,7 +74,7 @@
                         <i class="fas fa-circle"></i> Offline
                     </span>
                     <input type="file" id="fileInput" class="hidden" accept=".json" />
-                    <button class="btn btn-secondary" id="signOutBtn" style="background:#dc3545;color:white;">
+                    <button class="btn btn-secondary" id="signOutBtn" style="background:var(--color-danger);color:white;">
                         <i class="fas fa-sign-out-alt"></i> Sign Out
                     </button>
                 </div>
@@ -91,7 +93,7 @@
                 <button class="btn btn-actions" id="actionsBtn" style="position:relative;">
                     <i class="fas fa-tasks"></i> Actions Needed
                     <span class="badge-actions" id="actionsBadge"
-                    style="position:absolute;top:-5px;right:-5px;background:#dc3545;color:white;border-radius:50%;padding:2px 6px;font-size:0.6rem;font-weight:700;display:none;border:2px solid white;">
+                    style="position:absolute;top:-5px;right:-5px;background:var(--color-danger);color:white;border-radius:50%;padding:2px 6px;font-size:0.6rem;font-weight:700;display:none;border:2px solid white;">
                     0
                 </span>
             </button>
@@ -105,10 +107,10 @@
                 <i class="fas fa-layer-group"></i> Items: <strong id="itemCount">0</strong>
             </span>
             <span>
-                <i class="fas fa-circle" style="color:#0066a0;"></i> Online: ₹<span id="totalOnline">0</span>
+                <i class="fas fa-circle" style="color:var(--color-accent);"></i> Online: ₹<span id="totalOnline">0</span>
             </span>
             <span>
-                <i class="fas fa-circle" style="color:#2a7a4b;"></i> Cash: ₹<span id="totalCash">0</span>
+                <i class="fas fa-circle" style="color:var(--color-success);"></i> Cash: ₹<span id="totalCash">0</span>
             </span>
             <span>
                 <i class="fas fa-coins"></i> Total: ₹<span id="totalReserves">0</span>
@@ -259,17 +261,17 @@
             <div class="form-row">
                 <div>
                     <label>Online (₹)</label>
-                    <input type="number" id="onlineAmount" value="0" step="1" />
+                    <input type="text" id="onlineAmount" value="0" />
                 </div>
                 <div>
                     <label>Cash (₹)</label>
-                    <input type="number" id="cashAmount" value="0" step="1" />
+                    <input type="text" id="cashAmount" value="0" />
                 </div>
             </div>
             <div class="form-row">
                 <div>
                     <label>Required (₹)</label>
-                    <input type="number" id="requiredAmount" value="0" step="1" />
+                    <input type="text" id="requiredAmount" value="0" />
                 </div>
                 <div>
                     <label>Covered %</label>
