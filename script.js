@@ -224,6 +224,134 @@ function setSyncStatus(icon, label) {
 }
 
 // ============================================================
+// CALCULATOR INPUT HANDLER
+// ============================================================
+
+/**
+ * Evaluate a mathematical expression safely
+ * Supports +, -, *, / operations
+ * @param {string} expr - Mathematical expression
+ * @returns {number|null} Calculated result or null if invalid
+ */
+function safeEvaluate(expr) {
+    if (!expr || expr.trim() === '') return null;
+    
+    // Remove all spaces
+    let sanitized = expr.replace(/\s/g, '');
+    
+    // Only allow numbers, operators, and parentheses
+    if (!/^[0-9+\-*/().]+$/.test(sanitized)) {
+        return null;
+    }
+    
+    try {
+        // Use Function constructor for safe evaluation
+        const result = new Function(`return (${sanitized})`)();
+        if (typeof result === 'number' && !isNaN(result) && isFinite(result)) {
+            return Math.round(result * 100) / 100; // Round to 2 decimal places
+        }
+        return null;
+    } catch (e) {
+        return null;
+    }
+}
+
+/**
+ * Add calculator-like behavior to number input fields
+ * - Allows entering expressions like "100+50-25"
+ * - Evaluates on blur or Enter key
+ * - Shows the result in the field
+ */
+function setupCalculatorInputs() {
+    const numberInputs = document.querySelectorAll('#onlineAmount, #cashAmount, #requiredAmount');
+    
+    numberInputs.forEach(input => {
+        // Store original value for comparison
+        let previousValue = input.value;
+        
+        // Handle Enter key - evaluate expression
+        input.addEventListener('keydown', function(e) {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                evaluateCalculatorInput(this);
+                // Move to next field if tab-like behavior
+                const inputs = Array.from(numberInputs);
+                const currentIndex = inputs.indexOf(this);
+                if (currentIndex < inputs.length - 1) {
+                    inputs[currentIndex + 1].focus();
+                }
+            }
+        });
+        
+        // Handle blur - evaluate expression
+        input.addEventListener('blur', function() {
+            evaluateCalculatorInput(this);
+        });
+        
+        // Handle focus - select all text for easy editing
+        input.addEventListener('focus', function() {
+            this.select();
+        });
+        
+        // Handle input - track if user is typing an expression
+        input.addEventListener('input', function() {
+            const val = this.value.trim();
+            // If the value contains operators, show it as-is
+            if (/[+\-*/]/.test(val)) {
+                this.dataset.isExpression = 'true';
+            } else {
+                this.dataset.isExpression = 'false';
+            }
+            // Trigger covered % update
+            updateCoveredDisplay();
+        });
+    });
+}
+
+/**
+ * Evaluate and update a calculator input field
+ * @param {HTMLInputElement} input - The input element to evaluate
+ */
+function evaluateCalculatorInput(input) {
+    const val = input.value.trim();
+    if (!val) {
+        input.value = '0';
+        updateCoveredDisplay();
+        return;
+    }
+    
+    // Check if it's an expression
+    if (/[+\-*/]/.test(val)) {
+        const result = safeEvaluate(val);
+        if (result !== null) {
+            input.value = result;
+            input.dataset.isExpression = 'false';
+            showToast(`✅ Calculated: ${result}`, false);
+            updateCoveredDisplay();
+        } else {
+            // If invalid expression, try to parse as number
+            const num = parseFloat(val);
+            if (!isNaN(num)) {
+                input.value = num;
+                updateCoveredDisplay();
+            } else {
+                showToast('⚠️ Invalid expression', true);
+                // Keep the original value
+            }
+        }
+    } else {
+        // Just a number - validate
+        const num = parseFloat(val);
+        if (!isNaN(num)) {
+            input.value = num;
+        } else {
+            input.value = '0';
+        }
+        updateCoveredDisplay();
+    }
+}
+
+// ============================================================
 // TABLE RENDERER
 // ============================================================
 
@@ -1060,7 +1188,8 @@ async function loadFromServer(silent = false) {
             state.isLoaded = true;
 
             renderTable();
-            setSyncStatus('synced', `${state.reserves.length} items loaded (${auth.currentUser.email})`);
+            // FIX #1: Removed email from sync status display
+            setSyncStatus('synced', `${state.reserves.length} items loaded`);
             if (!silent) showToast(`✅ Loaded ${state.reserves.length} items from your account`);
 
         } else {
@@ -1080,6 +1209,7 @@ async function loadFromServer(silent = false) {
             });
 
             renderTable();
+            // FIX #1: Removed email from sync status display
             setSyncStatus('synced', 'Ready (empty)');
             if (!silent) showToast('📭 No data found for your account');
         }
@@ -1306,6 +1436,54 @@ function initApp() {
         state.searchTerm = this.value;
         renderTable();
     });
+    
+    // FIX #2: Add clear search button functionality
+    // Create clear button for search
+    const searchContainer = dom.searchInput?.closest('.search-container');
+    if (searchContainer) {
+        // Check if clear button already exists
+        let clearBtn = searchContainer.querySelector('.search-clear-btn');
+        if (!clearBtn) {
+            clearBtn = document.createElement('button');
+            clearBtn.className = 'search-clear-btn';
+            clearBtn.innerHTML = '<i class="fas fa-times-circle"></i>';
+            clearBtn.style.cssText = `
+                background: none;
+                border: none;
+                color: #6f8fa3;
+                cursor: pointer;
+                padding: 0 6px;
+                font-size: 0.9rem;
+                display: none;
+                transition: color 0.2s ease;
+            `;
+            clearBtn.addEventListener('click', function() {
+                dom.searchInput.value = '';
+                dom.searchInput.dispatchEvent(new Event('input'));
+                this.style.display = 'none';
+                dom.searchInput.focus();
+            });
+            
+            // Add hover effect
+            clearBtn.addEventListener('mouseenter', function() {
+                this.style.color = '#dc3545';
+            });
+            clearBtn.addEventListener('mouseleave', function() {
+                this.style.color = '#6f8fa3';
+            });
+            
+            // Insert after search input
+            searchContainer.appendChild(clearBtn);
+        }
+        
+        // Show/hide clear button based on input content
+        dom.searchInput.addEventListener('input', function() {
+            const clearBtn = searchContainer.querySelector('.search-clear-btn');
+            if (clearBtn) {
+                clearBtn.style.display = this.value.length > 0 ? 'block' : 'none';
+            }
+        });
+    }
 
     // ---------- ADD RESERVE ----------
     dom.addBtn.addEventListener('click', () => openForm(null));
@@ -1321,6 +1499,9 @@ function initApp() {
     document.getElementById('onlineAmount').addEventListener('input', updateCoveredDisplay);
     document.getElementById('cashAmount').addEventListener('input', updateCoveredDisplay);
     document.getElementById('requiredAmount').addEventListener('input', updateCoveredDisplay);
+
+    // ---------- SETUP CALCULATOR INPUTS ----------
+    setupCalculatorInputs();
 
     // ---------- DETAIL CARD ----------
     document.getElementById('cardCloseBtn').addEventListener('click', closeDetail);
